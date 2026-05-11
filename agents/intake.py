@@ -84,7 +84,10 @@ def run(document_id: str, filename: str, text: str, document_type_hint: str | No
     # Preferred path: schema-validated structured output via messages.parse().
     # Falls back to the hand-rolled complete_json path on:
     #  - older SDK versions that don't expose .parse() / parsed_output
-    #  - JSON parse failures on Haiku (rare with parse() but kept for safety)
+    #    (AttributeError) or the helper isn't imported (ImportError)
+    #  - JSON parse failures on Haiku
+    #  - SDK initialization errors when ANTHROPIC_API_KEY is unset
+    #    (TypeError from anthropic._client._validate_headers)
     try:
         from agents.intake_schema import IntakeResult
 
@@ -97,7 +100,7 @@ def run(document_id: str, filename: str, text: str, document_type_hint: str | No
             temperature=0.1,
         )
         result = parsed.model_dump() if hasattr(parsed, "model_dump") else dict(parsed)
-    except (AttributeError, ImportError, json.JSONDecodeError) as parse_err:
+    except (AttributeError, ImportError, json.JSONDecodeError, TypeError) as parse_err:
         logger.warning("Intake .parse() unavailable or failed: %s; falling back", parse_err)
         try:
             result = complete_json(

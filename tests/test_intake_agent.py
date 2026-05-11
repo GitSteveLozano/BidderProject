@@ -17,7 +17,14 @@ import pytest
 
 @pytest.fixture
 def captured_intake(monkeypatch):
-    """Capture every call to complete_json and return what we configure."""
+    """Capture every call to complete_json and return what we configure.
+
+    Also stubs `get_client` so the `messages.parse()` preferred path
+    raises AttributeError (FakeMessages has no `.parse`) and the
+    fallback to `complete_json` fires — exactly the older-SDK path.
+    Otherwise the real Anthropic client tries to authenticate and
+    fails with TypeError when no API key is set.
+    """
     captured: list[dict] = []
     next_response: dict = {
         "document_classification": "past_quote",
@@ -33,6 +40,15 @@ def captured_intake(monkeypatch):
     }
 
     import core.anthropic_client as ac
+
+    class _FakeMessages:
+        # Intentionally no `.parse` — drives intake.run() to the fallback
+        pass
+
+    class _FakeClient:
+        messages = _FakeMessages()
+
+    monkeypatch.setattr(ac, "get_client", lambda: _FakeClient())
 
     def fake_complete_json(model, system, user, **kwargs):
         captured.append({"model": model, "system": system, "user": user})
