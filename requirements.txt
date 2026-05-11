@@ -1,0 +1,23 @@
+# Streamlit Community Cloud install target.
+# Mirrors pyproject.toml [project] dependencies — kept in sync manually.
+# For local dev, prefer: pip install -e ".[dev,docs]"
+
+anthropic>=0.40.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+psycopg[binary,pool]>=3.1.18
+pgvector>=0.2.5
+python-multipart>=0.0.9
+pypdf>=4.0.0
+tenacity>=8.2.3
+openai>=1.30.0
+celery[redis]>=5.3.0
+redis>=5.0.0
+streamlit>=1.32.0
+pandas>=2.2.0
+plotly>=5.20.0
+python-dateutil>=2.9.0
+rich>=13.7.0
+jinja2>=3.1.3

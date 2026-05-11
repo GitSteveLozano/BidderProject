@@ -43,6 +43,7 @@ data/processed/
 
 # Streamlit
 .streamlit/secrets.toml
+!.streamlit/secrets.toml.example
 
 # Generated PDFs
 dist/*.pdf

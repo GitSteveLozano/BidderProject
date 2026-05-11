@@ -182,25 +182,37 @@ elif page == "Bid Generation":
             submitted = st.form_submit_button("Run all 4 generation agents")
 
     if estimate_cost:
-        from core.cost import estimate_bid_generation_cost
+        from core.cost import estimate_full_pipeline_cost
 
-        with st.spinner("Counting tokens..."):
-            est = estimate_bid_generation_cost(
+        with st.spinner("Counting tokens across all generation agents..."):
+            est = estimate_full_pipeline_cost(
                 company_id=company_id,
                 service_line=service_line,
                 scope_summary=scope_summary,
             )
-        if est.get("input_tokens") is not None:
-            ic1, ic2, ic3 = st.columns(3)
-            ic1.metric("Input tokens", f"{est['input_tokens']:,}")
-            ic2.metric("Est. input cost", f"${est['estimated_input_cost_usd']:.4f}")
-            ic3.metric("Model", est.get("model") or "—")
-            st.caption(
-                "Cost estimate uses Anthropic's `count_tokens` endpoint. "
-                "Output tokens are not included — typically 2-4× input for bid generation."
-            )
-        else:
-            st.warning(f"Cost estimate unavailable: {est.get('error', 'unknown')}")
+        # Headline metrics
+        tc1, tc2, tc3 = st.columns(3)
+        tc1.metric("Total input tokens", f"{est['total_input_tokens']:,}")
+        tc2.metric(
+            "Total output (est.)",
+            f"{est['total_output_tokens_estimated']:,}",
+        )
+        tc3.metric("Total est. cost", f"${est['total_cost_usd']:.4f}")
+
+        # Per-agent breakdown
+        with st.expander("Per-agent breakdown"):
+            agent_rows = []
+            for agent_name, data in est["by_agent"].items():
+                agent_rows.append({
+                    "Agent": agent_name,
+                    "Model": data["model"],
+                    "Input tokens": data["input_tokens"],
+                    "Output tokens (est.)": data["output_tokens_estimated"],
+                    "Cost (USD)": data["cost_usd"],
+                })
+            st.dataframe(pd.DataFrame(agent_rows), use_container_width=True)
+
+        st.caption(est["notes"])
 
     if submitted:
         bid_id = orchestrator.create_bid(
@@ -280,6 +292,88 @@ elif page == "Bid Generation":
             pb["capacity_modifier"]["action"],
         )
         st.markdown("**Pricing rationale:** " + (pb.get("narrative") or "—"))
+
+        # "What if" simulator — recompute the price as you drag sliders.
+        # Pure math, no LLM, no DB write. Lets the contractor see the
+        # margin impact of an alternate labor estimate before re-pricing.
+        with st.expander("🎛  What-if simulator (no LLM call)"):
+            from core.pricing_simulator import simulate, what_if_delta
+
+            baseline_hours = pb["labor"]["total_hours"]
+            baseline_labor_cost = pb["labor"]["subtotal"]
+            avg_rate = (baseline_labor_cost / baseline_hours
+                         if baseline_hours else 50.0)
+            baseline_mat = pb["materials"].get("subtotal") or 0
+            target_margin = pb["profit"]["target_margin_pct"]
+            overhead_pct = pb["overhead"].get("pct", 18.0)
+
+            wif_cols = st.columns(3)
+            sim_hours = wif_cols[0].slider(
+                "Labor hours",
+                min_value=max(10, int(baseline_hours * 0.5)),
+                max_value=int(baseline_hours * 2.0),
+                value=int(baseline_hours),
+                step=8,
+                key="wif_hours",
+            )
+            sim_mat = wif_cols[1].slider(
+                "Material cost",
+                min_value=float(round(baseline_mat * 0.5, 2)) if baseline_mat else 0.0,
+                max_value=float(round(baseline_mat * 2.0, 2)) if baseline_mat else 100000.0,
+                value=float(baseline_mat),
+                step=100.0,
+                key="wif_mat",
+            )
+            sim_margin = wif_cols[2].slider(
+                "Target margin %",
+                min_value=15.0,
+                max_value=50.0,
+                value=float(target_margin),
+                step=0.5,
+                key="wif_margin",
+            )
+
+            baseline_sim = simulate(
+                labor_hours=baseline_hours,
+                avg_loaded_rate=avg_rate,
+                material_subtotal=baseline_mat,
+                overhead_pct=overhead_pct,
+                target_margin_pct=target_margin,
+            )
+            scenario = simulate(
+                labor_hours=sim_hours,
+                avg_loaded_rate=avg_rate,
+                material_subtotal=sim_mat,
+                overhead_pct=overhead_pct,
+                target_margin_pct=sim_margin,
+            )
+            delta = what_if_delta(baseline_sim, scenario)
+
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            sc1.metric(
+                "Scenario target price",
+                f"${scenario['target_price']:,.0f}",
+                delta=f"${delta['target_price_delta']:+,.0f} "
+                       f"({delta['target_price_delta_pct']:+.1f}%)",
+            )
+            sc2.metric(
+                "Scenario profit",
+                f"${scenario['profit']:,.0f}",
+                delta=f"${delta['profit_delta']:+,.0f}",
+            )
+            sc3.metric(
+                "Scenario margin",
+                f"{scenario['realized_margin_pct']:.1f}%",
+                delta=f"{delta['margin_delta_pp']:+.1f}pp",
+            )
+            sc4.metric(
+                "Labor subtotal",
+                f"${scenario['labor_subtotal']:,.0f}",
+            )
+            st.caption(
+                "Pure deterministic math (no LLM call, no DB write). "
+                f"Avg loaded rate held constant at ${avg_rate:.2f}/h."
+            )
 
         # If the tool-use Pricing variant ran, render the actual LLM tool
         # call sequence — strongest demo angle for "not a GPT wrapper".

@@ -92,8 +92,19 @@ than they do. After 200, it knows their labor productivity by trade.
 
 ## Run the demo
 
-The interactive demo can't run on GitHub Pages (static-only). It
-boots locally in about 5 minutes:
+### Free interactive demo on Streamlit Cloud (~15 min one-time setup)
+
+[Full guide]({{ "/deployment/streamlit-cloud.html" | relative_url }}) —
+spin up a free Supabase Postgres + Streamlit Cloud deployment in about
+15 minutes. The bootstrap shim (`streamlit_app.py` at the repo root)
+auto-applies the schema and seeds all three archetypes on first load,
+so the demo is clickable immediately.
+
+Cost: $0. Anthropic API calls bill pay-as-you-go (~$0.10 per generated
+bid; the **Estimate input cost** button on the Bid Generation page
+shows the exact number before you click).
+
+### Or run locally in 5 minutes:
 
 ```bash
 git clone https://github.com/GitSteveLozano/BidderProject.git
