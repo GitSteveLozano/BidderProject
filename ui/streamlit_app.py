@@ -47,6 +47,7 @@ page = st.sidebar.radio(
         "Onboarding",
         "Bid Generation",
         "Active Bids",
+        "Follow-ups",
         "Job-Cost Reconciliation",
         "Intelligence Dashboard",
         "Agent Architecture",
@@ -177,9 +178,31 @@ elif page == "Bid Generation":
             f"{int(pb['capacity_utilization_at_start']*100)}%",
             pb["capacity_modifier"]["action"],
         )
-        with st.expander("Numeric trail (every number traces to a tool call)"):
-            st.json(pb)
         st.markdown("**Pricing rationale:** " + pb["narrative"])
+
+        with st.expander("🔍 Numeric citation trail (NOT A GPT WRAPPER)"):
+            st.caption(
+                "Every number above traces to a specific tool call. Pricing "
+                "agent NEVER generates labor or material costs from text."
+            )
+            for c in pb.get("citations", []):
+                if c:
+                    st.markdown(f"- {c}")
+            st.markdown("**Labor breakdown:**")
+            for trade in pb.get("labor", {}).get("by_trade", []):
+                st.markdown(
+                    f"  • `{trade.get('trade')}`: "
+                    f"{trade.get('hours')}h × ${trade.get('avg_loaded_rate')}/h "
+                    f"(avg of {trade.get('n_employees')} workers) = "
+                    f"${trade.get('labor_subtotal')}"
+                )
+            st.markdown("**Materials:**")
+            st.markdown(f"  • {pb['materials'].get('citation') or 'n/a'}")
+            st.markdown("**Capacity-aware modifier:**")
+            modifier = pb.get("capacity_modifier", {})
+            st.markdown(f"  • action: **{modifier.get('action')}** — {modifier.get('rationale')}")
+        with st.expander("Full pricing JSON"):
+            st.json(pb)
 
         comp = result["composition"]
         st.subheader("Generated bid draft")
@@ -188,11 +211,36 @@ elif page == "Bid Generation":
                 f"⚠️  Composition flagged {len(comp['exclusions_missing'])} "
                 f"missing exclusions. State: EXCLUSIONS_REVIEW."
             )
-            for e in comp["exclusions_missing"]:
-                st.markdown(f"- {e}")
+            st.markdown("**Decide for each:** (this is the spec §5.5 v2 behavior)")
+            with st.form("exclusions_review"):
+                decisions = {}
+                for e in comp["exclusions_missing"]:
+                    decisions[e] = st.radio(
+                        e,
+                        ["Add to quote", "Skip"],
+                        key=f"excl_{hash(e)}",
+                        horizontal=True,
+                    )
+                decided = st.form_submit_button("Apply decisions")
+            if decided:
+                accepted = [k for k, v in decisions.items() if v == "Add to quote"]
+                skipped = [k for k, v in decisions.items() if v == "Skip"]
+                orchestrator.accept_exclusions(bid_id, accepted, skipped)
+                st.success(
+                    f"Applied {len(accepted)} exclusions, skipped {len(skipped)}. "
+                    "State → DRAFT_GENERATED."
+                )
+                st.rerun()
         else:
             st.success(f"✅  {comp['total_required']} standard exclusions verified present.")
         st.markdown(comp["draft_markdown"])
+
+        # Send button
+        if comp["exclusions_verified"]:
+            if st.button("Send bid to client (transition to SENT)"):
+                orchestrator.submit_for_human_review(bid_id)
+                orchestrator.send_bid(bid_id)
+                st.success("Sent. Follow-up agent scheduled segment-aware cadence.")
 
 
 # ─── Page: Active Bids ─────────────────────────────────────────
@@ -216,14 +264,119 @@ elif page == "Active Bids":
             history = orchestrator.get_state_history(bid_id)
 
             st.subheader(f"{bid['client_name']} — {bid['service_line']}")
-            st.write(f"**State:** `{bid['state']}`")
-            st.write(f"**Estimated value:** ${float(bid['estimated_value'] or 0):,.2f}")
+            cols = st.columns(4)
+            cols[0].metric("State", bid["state"])
+            cols[1].metric("Estimated value", f"${float(bid['estimated_value'] or 0):,.0f}")
+            cols[2].metric(
+                "Delivered margin",
+                f"{float(bid['delivered_margin_pct']):,.1f}%"
+                if bid.get("delivered_margin_pct") is not None else "—",
+            )
+            cols[3].metric("Outcome", bid.get("outcome") or "—")
 
-            with st.expander("State history (agent trail)"):
-                st.dataframe(pd.DataFrame(history), use_container_width=True)
+            st.subheader("Agent trail")
+            if history:
+                # Visual state-history timeline
+                for i, h in enumerate(history):
+                    arrow = "→" if h.get("from_state") else "○"
+                    trigger_emoji = {"auto": "🤖", "human": "👤", "timer": "⏱", "seed": "🌱"}.get(
+                        h.get("triggered_by"), "•"
+                    )
+                    st.markdown(
+                        f"`{i+1:2d}` {trigger_emoji} "
+                        f"`{h.get('from_state', 'START')}` {arrow} "
+                        f"**`{h['to_state']}`** "
+                        f"— *{h.get('notes', '')}* "
+                        f"<small>({h['occurred_at']})</small>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.write("(no transitions recorded)")
+
+            # Exclusions audit
+            if bid.get("exclusions_applied") or bid.get("exclusions_missing"):
+                with st.expander("Exclusions audit"):
+                    st.write(f"**Applied ({len(bid.get('exclusions_applied') or [])}):**")
+                    for e in bid.get("exclusions_applied") or []:
+                        st.markdown(f"  - ✓ {e}")
+                    if bid.get("exclusions_missing"):
+                        st.write(
+                            f"**Skipped after review ({len(bid['exclusions_missing'])}):**"
+                        )
+                        for e in bid["exclusions_missing"]:
+                            st.markdown(f"  - ✗ {e}")
 
             with st.expander("Pricing breakdown"):
                 st.json(bid.get("pricing_breakdown"))
+
+            # Lifecycle actions
+            st.subheader("Actions")
+            action_cols = st.columns(4)
+            if bid["state"] in ("SENT", "FOLLOW_UP_1_SENT", "FOLLOW_UP_2_SENT",
+                                "FOLLOW_UP_3_SENT", "STALLED"):
+                if action_cols[0].button("Mark WON", key="won"):
+                    orchestrator.capture_outcome(bid["id"], "WON")
+                    st.rerun()
+                if action_cols[1].button("Mark LOST", key="lost"):
+                    orchestrator.capture_outcome(bid["id"], "LOST")
+                    st.rerun()
+            if bid["state"] == "WON":
+                if action_cols[0].button("Start job", key="start"):
+                    orchestrator.mark_job_started(bid["id"])
+                    st.rerun()
+            if bid["state"] == "JOB_IN_PROGRESS":
+                if action_cols[0].button("Mark job complete → run JCR", key="complete"):
+                    with st.spinner("Running JCR..."):
+                        result = orchestrator.mark_job_complete(bid["id"])
+                    st.success(
+                        f"Reconciled. Delivered margin "
+                        f"{result['reconciliation']['delivered_margin_pct']}%"
+                    )
+                    st.rerun()
+
+
+# ─── Page: Follow-ups ──────────────────────────────────────────
+elif page == "Follow-ups":
+    st.header("Layer 3 — Follow-up Automation")
+    st.caption("Spec §5.7 / §7.3. Segment-aware cadence — repeat: single soft touch; cold: 3-touch.")
+
+    rows = fetch_all(
+        """
+        SELECT f.id, f.bid_id, f.sequence_number, f.scheduled_for, f.state,
+               f.draft_message, f.sent_at,
+               b.client_name, b.client_segment, b.service_line, b.estimated_value
+        FROM follow_ups f JOIN bids b ON b.id = f.bid_id
+        WHERE b.company_id = %s
+        ORDER BY f.scheduled_for ASC
+        """,
+        (company_id,),
+    )
+    if not rows:
+        st.info(
+            "No follow-ups scheduled yet. Send a bid from the Bid Generation page to "
+            "trigger the Follow-up agent."
+        )
+    else:
+        st.caption(f"{len(rows)} scheduled / sent follow-up(s)")
+        for r in rows:
+            with st.expander(
+                f"#{r['sequence_number']} → {r['client_name']} ({r['client_segment']}) "
+                f"— {r['service_line']} ${float(r['estimated_value'] or 0):,.0f} — "
+                f"state: {r['state']}"
+            ):
+                st.write(f"**Scheduled for:** {r['scheduled_for']}")
+                if r["draft_message"]:
+                    st.markdown("**Drafted message:**")
+                    st.code(r["draft_message"])
+                else:
+                    if st.button(
+                        "Draft message",
+                        key=f"draft_{r['id']}",
+                    ):
+                        from agents import follow_up
+
+                        drafted = follow_up.draft_message(r["bid_id"], r["sequence_number"])
+                        st.code(drafted["draft"])
 
 
 # ─── Page: Job-Cost Reconciliation ─────────────────────────────

@@ -35,27 +35,47 @@ See `docs/architecture_spec_v2.md` for the full specification.
 
 ## Running locally
 
-Requires Python 3.11+, Postgres 15+ with the `pgvector` extension, and an
-Anthropic API key.
+### Option A — Docker Compose (recommended)
 
 ```bash
-# 1. Install
+cp .env.example .env    # add ANTHROPIC_API_KEY (and optionally OPENAI_API_KEY)
+docker compose up --build
+docker compose exec api python -m db.seed_all
+```
+
+Then open:
+- UI: http://localhost:8501
+- API docs: http://localhost:8000/docs
+
+### Option B — Local Python
+
+Requires Python 3.11+, Postgres 15+ with `pgvector`, and Redis.
+
+```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-
-# 2. Configure
 cp .env.example .env
-# edit .env with ANTHROPIC_API_KEY and DATABASE_URL
 
-# 3. Initialize DB
+# Initialize DB
 psql "$DATABASE_URL" -f db/schema.sql
-python -m db.seed   # loads simulated payroll + schedule + bid history
+python -m db.seed_all   # all 3 archetypes (Cavy stucco, Vantage millwork, agency)
 
-# 4. Run API
+# Run services in separate terminals
 uvicorn api.main:app --reload
-
-# 5. Run demo UI (separate terminal)
 streamlit run ui/streamlit_app.py
+celery -A core.celery_app worker --loglevel=INFO
+celery -A core.celery_app beat --loglevel=INFO
+```
+
+### CLI
+
+```bash
+python cli.py health             # check DB + schema + companies
+python cli.py seed --archetype a # seed just Archetype A
+python cli.py demo               # run end-to-end demo flow
+python cli.py capacity --company-id <uuid>
+python cli.py intelligence --company-id <uuid>
+python cli.py reset --yes        # wipe and re-seed (spec §11 Risk 2)
 ```
 
 ## Models

@@ -7,13 +7,13 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-import anthropic
-
 from core.settings import get_settings
 
 
 @lru_cache(maxsize=1)
-def get_client() -> anthropic.Anthropic:
+def get_client():
+    import anthropic
+
     return anthropic.Anthropic(api_key=get_settings().anthropic_api_key)
 
 

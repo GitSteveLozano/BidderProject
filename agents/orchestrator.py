@@ -13,12 +13,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from core.anthropic_client import complete_json
-from core.db import execute, fetch_one
-from core.settings import get_settings
 from core.states import BidState, can_transition, is_terminal
-
-from agents import composition, follow_up, intake, jcr, pricing
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +25,8 @@ def _record_transition(
     bid_id: str, from_state: str | None, to_state: str,
     triggered_by: str, agent_call_id: str | None = None, notes: str = "",
 ) -> None:
+    from core.db import execute
+
     execute(
         """
         INSERT INTO bid_state_history (bid_id, from_state, to_state,
@@ -43,6 +40,8 @@ def _record_transition(
 def transition(bid_id: UUID | str, to_state: BidState | str,
                triggered_by: str = "auto", notes: str = "") -> dict:
     """Transition a bid to a new state. Raises if transition is invalid."""
+    from core.db import execute, fetch_one
+
     bid_id = str(bid_id)
     target = to_state.value if isinstance(to_state, BidState) else to_state
     row = fetch_one("SELECT state FROM bids WHERE id = %s", (bid_id,))
@@ -71,6 +70,8 @@ def create_bid(
     estimated_start_date: date | None = None,
     bid_deadline: datetime | None = None,
 ) -> str:
+    from core.db import execute
+
     bid_id = str(uuid4())
     execute(
         """
@@ -95,6 +96,9 @@ def run_assessment(bid_id: UUID | str, labor_plan: list[dict], material_quantity
     Fires Pricing then Composition. Decision between DRAFT_GENERATED and
     EXCLUSIONS_REVIEW depends on Composition's exclusions verification.
     """
+    from agents import composition, pricing
+    from core.db import execute, fetch_one
+
     bid_id = str(bid_id)
     bid = fetch_one(
         """
@@ -170,6 +174,8 @@ def run_assessment(bid_id: UUID | str, labor_plan: list[dict], material_quantity
 
 def accept_exclusions(bid_id: UUID | str, accepted: list[str], skipped: list[str]) -> dict:
     """Human reviewed missing exclusions; route back to DRAFT_GENERATED."""
+    from core.db import execute
+
     bid_id = str(bid_id)
     execute(
         """
@@ -190,6 +196,9 @@ def submit_for_human_review(bid_id: UUID | str) -> dict:
 
 def send_bid(bid_id: UUID | str) -> dict:
     """HUMAN_REVIEW -> SENT, then schedule follow-ups per segment."""
+    from agents import follow_up
+    from core.db import execute, fetch_one
+
     bid_id = str(bid_id)
     execute("UPDATE bids SET sent_at = NOW() WHERE id = %s", (bid_id,))
     result = transition(bid_id, BidState.SENT, "human", "bid sent to prospect")
@@ -201,6 +210,8 @@ def send_bid(bid_id: UUID | str) -> dict:
 def capture_outcome(bid_id: UUID | str, outcome: str, reason: str | None = None,
                     competitor: str | None = None, winning_bid: float | None = None) -> dict:
     """Capture WON / LOST / STALLED / NO_DECISION outcomes."""
+    from core.db import execute
+
     bid_id = str(bid_id)
     execute(
         """
@@ -229,6 +240,8 @@ def mark_job_started(bid_id: UUID | str) -> dict:
 
 def mark_job_complete(bid_id: UUID | str) -> dict:
     """Human marks the job complete; orchestrator immediately runs JCR."""
+    from agents import jcr
+
     bid_id = str(bid_id)
     transition(bid_id, BidState.JOB_COMPLETE, "human", "work delivered")
     recon = jcr.reconcile_job(bid_id)
@@ -256,6 +269,9 @@ Return: {"intent": str, "confidence": number, "rationale": str}
 
 
 def classify_intent(message: str) -> dict:
+    from core.anthropic_client import complete_json
+    from core.settings import get_settings
+
     return complete_json(
         model=get_settings().model_haiku,
         system=_ROUTE_SYSTEM,
@@ -292,4 +308,6 @@ def get_state_history(bid_id: UUID | str) -> list[dict]:
 # import agents.intake directly.
 def run_intake(document_id: str, filename: str, text: str,
                document_type_hint: str | None = None) -> dict:
+    from agents import intake
+
     return intake.run(document_id, filename, text, document_type_hint)

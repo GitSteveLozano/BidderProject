@@ -2,34 +2,36 @@
 
 Uses psycopg3 connection pool. Pgvector adapter registered on connect so
 vector(1536) columns round-trip as Python lists / numpy arrays.
+
+The psycopg import is deferred so this module is importable in test
+environments that monkeypatch fetch_one/fetch_all/execute.
 """
 from __future__ import annotations
 
 from contextlib import contextmanager
 from typing import Any, Iterator
 
-import psycopg
-from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
-
 from core.settings import get_settings
 
-_pool: ConnectionPool | None = None
+_pool = None
 
 
-def _register_pgvector(conn: psycopg.Connection) -> None:
+def _register_pgvector(conn) -> None:
     try:
         from pgvector.psycopg import register_vector
 
         register_vector(conn)
     except Exception:
-        # pgvector not installed in env (e.g. unit tests with sqlite mock) — skip
+        # pgvector not installed (e.g. unit tests) — skip
         pass
 
 
-def get_pool() -> ConnectionPool:
+def get_pool():
     global _pool
     if _pool is None:
+        from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
+
         _pool = ConnectionPool(
             conninfo=get_settings().database_url,
             min_size=1,
@@ -42,13 +44,13 @@ def get_pool() -> ConnectionPool:
 
 
 @contextmanager
-def connection() -> Iterator[psycopg.Connection]:
+def connection() -> Iterator[Any]:
     with get_pool().connection() as conn:
         yield conn
 
 
 @contextmanager
-def cursor() -> Iterator[psycopg.Cursor]:
+def cursor() -> Iterator[Any]:
     with connection() as conn, conn.cursor() as cur:
         yield cur
 
