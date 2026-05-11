@@ -1,10 +1,15 @@
 /**
  * Supabase client + read helpers.
  *
- * Public reads (companies list, service lines, recent bids) use the
- * anon key from server-rendered pages — Postgres RLS should permit
- * those rows. Writes go through the service-role key inside a
- * Cloudflare Function (never expose service_role to the client).
+ * All server-rendered reads use the **service_role** key. The Astro
+ * Cloudflare worker runs server-side only; the service_role key never
+ * crosses to the browser. This bypasses Postgres RLS, which matters
+ * because the bidintel schema (db/schema.sql) doesn't ship RLS
+ * policies — locking down by tenant happens at the application layer.
+ *
+ * The remaining `'anon'` role is kept for parity / forward
+ * compatibility with a future Supabase Auth integration where browser
+ * code holds an anon-signed JWT.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
@@ -17,7 +22,10 @@ export interface CloudflareEnv {
   DEFAULT_MODEL_SONNET?: string;
 }
 
-export function client(env: CloudflareEnv | undefined, role: 'anon' | 'service' = 'anon'): SupabaseClient {
+export function client(
+  env: CloudflareEnv | undefined,
+  role: 'anon' | 'service' = 'service',
+): SupabaseClient {
   const url = env?.SUPABASE_URL;
   const key = role === 'service' ? env?.SUPABASE_SERVICE_KEY : env?.SUPABASE_ANON_KEY;
   if (!url || !key) {
@@ -42,7 +50,7 @@ export interface Company {
 
 export async function getCompanies(env?: CloudflareEnv): Promise<Company[]> {
   try {
-    const sb = client(env, 'anon');
+    const sb = client(env, 'service');
     const { data, error } = await sb
       .from('companies')
       .select('id, name, segment, onboarded_at')
@@ -50,8 +58,6 @@ export async function getCompanies(env?: CloudflareEnv): Promise<Company[]> {
     if (error) throw error;
     return data ?? [];
   } catch (e) {
-    // During build (no env yet) or when Supabase isn't configured,
-    // return a fallback so the page still renders.
     console.warn('getCompanies failed; returning fallback', e);
     return [
       { id: '00000000-0000-0000-0000-000000000001', name: 'Honolulu Stucco & Exteriors LLC (demo)', segment: 'repeat_customer', onboarded_at: null },
@@ -70,7 +76,7 @@ export async function getServiceLines(
   env?: CloudflareEnv,
 ): Promise<ServiceLine[]> {
   try {
-    const sb = client(env, 'anon');
+    const sb = client(env, 'service');
     const { data, error } = await sb
       .from('service_lines')
       .select('line_name, standard_exclusions, typical_margin_pct')

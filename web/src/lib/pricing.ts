@@ -62,7 +62,7 @@ export async function getLoadedLaborCost(
   env?: CloudflareEnv,
 ): Promise<LoadedLaborLookup> {
   const candidates = TRADE_MATCH[trade.toLowerCase()] ?? [trade];
-  const sb = supabaseClient(env, 'anon');
+  const sb = supabaseClient(env, 'service');
   const { data, error } = await sb
     .from('employees')
     .select(`
@@ -134,7 +134,7 @@ export async function getCapacityUtilization(
   weeks: number,
   env?: CloudflareEnv,
 ): Promise<CapacityResult> {
-  const sb = supabaseClient(env, 'anon');
+  const sb = supabaseClient(env, 'service');
   // Active headcount × 40h/wk = weekly capacity
   const { count: headcount } = await sb
     .from('employees')
