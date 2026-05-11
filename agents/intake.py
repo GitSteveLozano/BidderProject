@@ -73,7 +73,7 @@ def run(document_id: str, filename: str, text: str, document_type_hint: str | No
     Inputs: document_id (uuid str), filename, raw text, optional type hint.
     Output: structured JSON dict (see USER_TEMPLATE).
     """
-    from core.anthropic_client import complete_json
+    from core.anthropic_client import complete_json, parse_structured
     from core.settings import get_settings
     from tools.pdf_extraction import classify_document_hint
 
@@ -81,23 +81,41 @@ def run(document_id: str, filename: str, text: str, document_type_hint: str | No
     hint = document_type_hint or classify_document_hint(filename, text)
     user_msg = USER_TEMPLATE.format(filename=filename, hint=hint, text=text[:8000])
 
+    # Preferred path: schema-validated structured output via messages.parse().
+    # Falls back to the hand-rolled complete_json path on:
+    #  - older SDK versions that don't expose .parse() / parsed_output
+    #  - JSON parse failures on Haiku (rare with parse() but kept for safety)
     try:
-        result = complete_json(
+        from agents.intake_schema import IntakeResult
+
+        parsed = parse_structured(
             model=settings.model_haiku,
             system=SYSTEM_PROMPT,
             user=user_msg,
+            output_format=IntakeResult,
             max_tokens=2048,
             temperature=0.1,
         )
-    except json.JSONDecodeError:
-        logger.warning("Intake JSON parse failed, retrying with Sonnet")
-        result = complete_json(
-            model=settings.model_sonnet,
-            system=SYSTEM_PROMPT,
-            user=user_msg,
-            max_tokens=2048,
-            temperature=0.1,
-        )
+        result = parsed.model_dump() if hasattr(parsed, "model_dump") else dict(parsed)
+    except (AttributeError, ImportError, json.JSONDecodeError) as parse_err:
+        logger.warning("Intake .parse() unavailable or failed: %s; falling back", parse_err)
+        try:
+            result = complete_json(
+                model=settings.model_haiku,
+                system=SYSTEM_PROMPT,
+                user=user_msg,
+                max_tokens=2048,
+                temperature=0.1,
+            )
+        except json.JSONDecodeError:
+            logger.warning("Intake Haiku JSON parse failed, retrying with Sonnet")
+            result = complete_json(
+                model=settings.model_sonnet,
+                system=SYSTEM_PROMPT,
+                user=user_msg,
+                max_tokens=2048,
+                temperature=0.1,
+            )
 
     result["document_id"] = document_id
     result.setdefault("confidence_score", 0.5)

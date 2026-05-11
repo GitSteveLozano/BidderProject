@@ -95,6 +95,34 @@ def complete(
     return "".join(parts).strip()
 
 
+def parse_structured(
+    model: str,
+    system: str,
+    user: str,
+    output_format: Any,
+    max_tokens: int = 2048,
+    temperature: float = 0.1,
+    cache_system: bool = False,
+    system_extra: list[str] | None = None,
+):
+    """Schema-validated completion via `client.messages.parse()`.
+
+    `output_format` is a Pydantic model class. The SDK forces Claude to
+    return JSON matching the model's JSON schema and validates the
+    response. Returns the parsed Pydantic instance, not a dict.
+    """
+    system_payload = _build_system(system, cache_system, system_extra)
+    response = get_client().messages.parse(
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        system=system_payload,
+        messages=[{"role": "user", "content": user}],
+        output_format=output_format,
+    )
+    return response.parsed_output
+
+
 def complete_json(
     model: str,
     system: str,

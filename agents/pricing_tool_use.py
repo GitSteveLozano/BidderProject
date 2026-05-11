@@ -17,15 +17,6 @@ import logging
 from datetime import date
 from uuid import UUID
 
-import anthropic
-
-from core.anthropic_client import get_client
-from core.settings import get_settings
-from tools.capacity_lookup import capacity_modifier, get_capacity_utilization
-from tools.labor_cost_lookup import get_loaded_labor_cost
-from tools.material_cost_lookup import lookup_material_cost
-from tools.win_rate_lookup import get_win_rate_at_price
-
 logger = logging.getLogger(__name__)
 
 
@@ -147,6 +138,11 @@ nothing else, no code fence):
 
 
 def _dispatch_tool(name: str, company_id: str, args: dict) -> dict:
+    from tools.capacity_lookup import capacity_modifier, get_capacity_utilization
+    from tools.labor_cost_lookup import get_loaded_labor_cost
+    from tools.material_cost_lookup import lookup_material_cost
+    from tools.win_rate_lookup import get_win_rate_at_price
+
     if name == "get_loaded_labor_cost":
         return get_loaded_labor_cost(company_id, args["trade"], float(args["hours"]))
     if name == "lookup_material_cost":
@@ -184,6 +180,9 @@ def compute_pricing_tool_use(
     tool_use / tool_result blocks is logged at INFO level so the demo UI
     can render it.
     """
+    from core.anthropic_client import get_client
+    from core.settings import get_settings
+
     company_id = str(company_id)
     client = get_client()
     model = get_settings().model_sonnet

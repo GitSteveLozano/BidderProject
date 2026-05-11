@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import bids, companies, documents, intelligence
+from api.routes import bids, companies, documents, intelligence, webhooks
 from core.logging import configure as configure_logging
 from core.logging import current_request_id, set_request_id
 from core.settings import get_settings
@@ -43,6 +43,7 @@ app.include_router(companies.router, prefix="/companies", tags=["companies"])
 app.include_router(documents.router, prefix="/documents", tags=["documents"])
 app.include_router(bids.router, prefix="/bids", tags=["bids"])
 app.include_router(intelligence.router, prefix="/intelligence", tags=["intelligence"])
+app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 
 
 @app.get("/")

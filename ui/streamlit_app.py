@@ -47,6 +47,7 @@ page = st.sidebar.radio(
         "Onboarding",
         "Bid Generation",
         "Active Bids",
+        "Compare Bids",
         "Follow-ups",
         "Job-Cost Reconciliation",
         "Intelligence Dashboard",
@@ -400,6 +401,142 @@ elif page == "Active Bids":
                         f"{result['reconciliation']['delivered_margin_pct']}%"
                     )
                     st.rerun()
+
+
+# ─── Page: Compare Bids ────────────────────────────────────────
+elif page == "Compare Bids":
+    st.header("Compare two bids side-by-side")
+    st.caption(
+        "Useful for: same scope to two clients (price negotiation), "
+        "same client across two service lines (cross-sell mix), or "
+        "WON vs LOST on similar scope (loss postmortem)."
+    )
+
+    bids = fetch_all(
+        """
+        SELECT id, client_name, service_line, estimated_value,
+               estimated_labor_hours, state, outcome,
+               delivered_margin_pct, exclusions_applied,
+               exclusions_missing, capacity_at_quote, created_at,
+               pricing_breakdown
+        FROM bids WHERE company_id = %s
+        ORDER BY created_at DESC LIMIT 100
+        """,
+        (company_id,),
+    )
+    if len(bids) < 2:
+        st.info("Need at least 2 bids to compare.")
+    else:
+        def _label(b):
+            return (
+                f"{b['client_name'][:30]} — {b['service_line']} "
+                f"(${float(b['estimated_value'] or 0):,.0f}, {b['state']})"
+            )
+
+        labels = [_label(b) for b in bids]
+        cl, cr = st.columns(2)
+        with cl:
+            left_idx = st.selectbox("Left bid", range(len(bids)),
+                                     format_func=lambda i: labels[i], key="left_bid")
+        with cr:
+            right_idx = st.selectbox(
+                "Right bid", range(len(bids)),
+                format_func=lambda i: labels[i],
+                index=1 if len(bids) > 1 else 0,
+                key="right_bid",
+            )
+        a, b = bids[left_idx], bids[right_idx]
+
+        def _money(x):
+            try:
+                return f"${float(x):,.0f}"
+            except (TypeError, ValueError):
+                return "—"
+
+        def _pct(x):
+            try:
+                return f"{float(x):.1f}%"
+            except (TypeError, ValueError):
+                return "—"
+
+        # Key metrics side-by-side
+        st.subheader("Pricing")
+        m1, m2 = st.columns(2)
+        for col, bid in [(m1, a), (m2, b)]:
+            col.markdown(f"**{bid['client_name']}**")
+            col.metric("Estimated value", _money(bid.get("estimated_value")))
+            col.metric("Labor hours", bid.get("estimated_labor_hours") or "—")
+            col.metric(
+                "Capacity at quote",
+                f"{int(float(bid.get('capacity_at_quote') or 0) * 100)}%"
+                if bid.get("capacity_at_quote") else "—",
+            )
+            col.metric("Outcome", bid.get("outcome") or "—")
+            if bid.get("delivered_margin_pct") is not None:
+                col.metric("Delivered margin", _pct(bid["delivered_margin_pct"]))
+
+        # Pricing-breakdown deltas
+        pb_a = a.get("pricing_breakdown") or {}
+        pb_b = b.get("pricing_breakdown") or {}
+        if pb_a and pb_b:
+            st.subheader("Breakdown delta")
+            rows = []
+            for k in ("target_price", "range_low", "range_high"):
+                rows.append({
+                    "Field": k,
+                    "Left": pb_a.get(k),
+                    "Right": pb_b.get(k),
+                    "Delta": (pb_b.get(k) or 0) - (pb_a.get(k) or 0),
+                })
+            for sub in ("labor", "materials", "overhead", "profit"):
+                rows.append({
+                    "Field": f"{sub}.subtotal",
+                    "Left": (pb_a.get(sub) or {}).get("subtotal"),
+                    "Right": (pb_b.get(sub) or {}).get("subtotal"),
+                    "Delta": ((pb_b.get(sub) or {}).get("subtotal") or 0)
+                              - ((pb_a.get(sub) or {}).get("subtotal") or 0),
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+        # Exclusions diff
+        st.subheader("Exclusions diff")
+        e_a = set(a.get("exclusions_applied") or [])
+        e_b = set(b.get("exclusions_applied") or [])
+        only_a = e_a - e_b
+        only_b = e_b - e_a
+        common = e_a & e_b
+        dc1, dc2, dc3 = st.columns(3)
+        dc1.markdown("**Only left**")
+        for ex in sorted(only_a):
+            dc1.markdown(f"- {ex}")
+        if not only_a:
+            dc1.caption("(none)")
+        dc2.markdown("**Common**")
+        for ex in sorted(common):
+            dc2.markdown(f"- {ex}")
+        if not common:
+            dc2.caption("(none)")
+        dc3.markdown("**Only right**")
+        for ex in sorted(only_b):
+            dc3.markdown(f"- {ex}")
+        if not only_b:
+            dc3.caption("(none)")
+
+        # Skipped (missing-after-review) exclusions — these are the
+        # post-mortem hot zone for loss-pattern analysis
+        sk_a = set(a.get("exclusions_missing") or [])
+        sk_b = set(b.get("exclusions_missing") or [])
+        if sk_a or sk_b:
+            st.subheader("⚠️  Skipped exclusions (post-review)")
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                st.markdown(f"**Left ({len(sk_a)})**")
+                for ex in sorted(sk_a):
+                    st.markdown(f"- {ex}")
+            with sc2:
+                st.markdown(f"**Right ({len(sk_b)})**")
+                for ex in sorted(sk_b):
+                    st.markdown(f"- {ex}")
 
 
 # ─── Page: Follow-ups ──────────────────────────────────────────
