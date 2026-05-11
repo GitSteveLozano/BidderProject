@@ -65,19 +65,28 @@ Keep the service_role key safe; it bypasses Postgres RLS.
    → **Create application** → **Connect to Git**.
 2. Authorize Cloudflare to read your GitHub repos. Pick
    `GitSteveLozano/BidderProject`.
-3. **Set up builds and deployments**:
+3. **Set up builds and deployments** — these settings tell Cloudflare to
+   build inside `web/` (a monorepo subdirectory) so Pages Functions in
+   `web/functions/` are colocated with the build output:
    - **Project name:** `proservice-bid-intelligence` (or whatever — this
      becomes part of your `*.pages.dev` URL)
    - **Production branch:** `main`
    - **Framework preset:** None (Astro isn't in the dropdown for
-     subdirectory builds; we'll set commands manually)
-   - **Build command:** `cd web && npm install && npm run build`
-   - **Build output directory:** `web/dist`
-   - **Root directory (Advanced):** *leave blank* (Cloudflare builds
-     from repo root; the `cd web` in the command handles the subdir)
-   - **Node.js version (Environment variables):** add a build-time
-     env var `NODE_VERSION` = `20`
+     subdirectory builds; we set commands manually)
+   - **Root directory (Advanced):** **`web`**  ← critical, treats `web/`
+     as the project root
+   - **Build command:** `npm install && npm run build`
+   - **Build output directory:** `dist` (relative to the root above —
+     resolves to `web/dist/`)
+   - **Node.js version:** add a build-time env var `NODE_VERSION` = `20`
 4. Click **Save and Deploy**. First build takes ~3-4 min.
+
+> **If you see "Could not detect a directory containing static files":**
+> the Root directory + Build output directory aren't aligned. Either
+> set Root directory = `web` and output = `dist`, OR leave Root blank
+> and use output = `web/dist` with build command `cd web && npm
+> install && npm run build`. The first form is preferred — it makes
+> Pages Functions discovery automatic.
 
 The build will succeed but the deployed app won't function yet — it
 needs runtime env vars (next step).
