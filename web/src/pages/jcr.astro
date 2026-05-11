@@ -1,19 +1,23 @@
 ---
 import Base from '@/layouts/Base.astro';
+import SSRError from '@/components/SSRError.astro';
 import { client as supabaseClient, getCompanies } from '@/lib/supabase';
 
 export const prerender = false;
 
-const env = Astro.locals.runtime?.env;
-const companies = await getCompanies(env);
-const companyId = Astro.url.searchParams.get('company_id') ?? companies[0]?.id;
-
+let renderError: unknown = null;
+let companies: Awaited<ReturnType<typeof getCompanies>> = [];
+let companyId: string | undefined;
 let rows: any[] = [];
 let stats = { count: 0, avgMargin: 0, avgLaborVar: 0 };
-if (env && companyId) {
-  try {
+
+try {
+  const env = Astro.locals.runtime?.env;
+  companies = await getCompanies(env);
+  companyId = Astro.url.searchParams.get('company_id') ?? companies[0]?.id;
+  if (env && companyId) {
     const sb = supabaseClient(env, 'anon');
-    const { data } = await sb
+    const { data, error } = await sb
       .from('job_cost_reconciliation')
       .select(`
         bid_id, quoted_price, quoted_labor_hours, actual_labor_hours,
@@ -25,6 +29,7 @@ if (env && companyId) {
       .eq('company_id', companyId)
       .order('reconciled_at', { ascending: false })
       .limit(100);
+    if (error) throw error;
     rows = data ?? [];
     if (rows.length > 0) {
       stats.count = rows.length;
@@ -34,13 +39,14 @@ if (env && companyId) {
         rows.reduce((s, r) => s + Number(r.variance_labor_hours_pct ?? 0), 0) /
         rows.length;
     }
-  } catch (e) {
-    console.warn('JCR fetch failed', e);
   }
+} catch (e) {
+  renderError = e;
 }
 ---
 
 <Base title="Job-Cost Reconciliation · ProService Bid Intelligence">
+  {renderError && <SSRError page="/jcr" error={renderError} />}
   <section class="py-6">
     <div class="flex items-center justify-between">
       <div>

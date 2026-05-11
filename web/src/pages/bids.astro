@@ -1,31 +1,37 @@
 ---
 import Base from '@/layouts/Base.astro';
+import SSRError from '@/components/SSRError.astro';
 import { client as supabaseClient, getCompanies } from '@/lib/supabase';
 
 export const prerender = false;
 
-const env = Astro.locals.runtime?.env;
-const companies = await getCompanies(env);
-const companyId = Astro.url.searchParams.get('company_id') ?? companies[0]?.id;
-
+let renderError: unknown = null;
+let companies: Awaited<ReturnType<typeof getCompanies>> = [];
+let companyId: string | undefined;
 let bids: any[] = [];
-if (env && companyId) {
-  try {
+
+try {
+  const env = Astro.locals.runtime?.env;
+  companies = await getCompanies(env);
+  companyId = Astro.url.searchParams.get('company_id') ?? companies[0]?.id;
+  if (env && companyId) {
     const sb = supabaseClient(env, 'anon');
-    const { data } = await sb
+    const { data, error } = await sb
       .from('bids')
       .select('id, client_name, service_line, state, outcome, estimated_value, delivered_margin_pct, created_at')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(50);
+    if (error) throw error;
     bids = data ?? [];
-  } catch (e) {
-    console.warn('bids fetch failed', e);
   }
+} catch (e) {
+  renderError = e;
 }
 ---
 
 <Base title="Bids · ProService Bid Intelligence">
+  {renderError && <SSRError page="/bids" error={renderError} />}
   <section class="py-6">
     <div class="flex items-center justify-between">
       <h1 class="text-3xl font-semibold tracking-tight">Bids</h1>

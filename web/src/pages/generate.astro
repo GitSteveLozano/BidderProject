@@ -1,16 +1,28 @@
 ---
 import Base from '@/layouts/Base.astro';
+import SSRError from '@/components/SSRError.astro';
 import BidGenerator from '@/components/BidGenerator';
 import { getCompanies, getServiceLines } from '@/lib/supabase';
 
-// Server-rendered; runs on Cloudflare Pages Functions.
-const companies = await getCompanies(Astro.locals.runtime?.env);
-const defaultCompanyId = companies[0]?.id;
-const serviceLines = defaultCompanyId
-  ? await getServiceLines(defaultCompanyId, Astro.locals.runtime?.env)
-  : [];
-
+// `prerender = false` MUST appear before any await so the Astro
+// hybrid build classifies this route as SSR (otherwise it's
+// prerendered at build time and Astro.locals.runtime is undefined).
 export const prerender = false;
+
+let renderError: unknown = null;
+let companies: Awaited<ReturnType<typeof getCompanies>> = [];
+let serviceLines: Awaited<ReturnType<typeof getServiceLines>> = [];
+
+try {
+  const env = Astro.locals.runtime?.env;
+  companies = await getCompanies(env);
+  const defaultCompanyId = companies[0]?.id;
+  serviceLines = defaultCompanyId
+    ? await getServiceLines(defaultCompanyId, env)
+    : [];
+} catch (e) {
+  renderError = e;
+}
 ---
 
 <Base title="Generate a bid · ProService Bid Intelligence">
@@ -24,9 +36,13 @@ export const prerender = false;
     </p>
   </section>
 
-  <BidGenerator
-    client:load
-    companies={companies}
-    serviceLines={serviceLines}
-  />
+  {renderError ? (
+    <SSRError page="/generate" error={renderError} />
+  ) : (
+    <BidGenerator
+      client:load
+      companies={companies}
+      serviceLines={serviceLines}
+    />
+  )}
 </Base>
