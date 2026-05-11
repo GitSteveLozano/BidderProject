@@ -38,10 +38,15 @@ SELECT COUNT(*) FROM bids;          -- expect ~100
 SELECT COUNT(*) FROM intelligence_insights;  -- expect 5+
 ```
 
-If the schema isn't applied yet:
+If the schema isn't applied yet, the fastest no-Python path is
+[`db/seed_supabase.sql`](../../db/seed_supabase.sql) — a single SQL
+file you paste into Supabase's SQL Editor. See
+[`seed-supabase.md`]({{ "/deployment/seed-supabase.md" | relative_url }})
+for the click-by-click walkthrough.
+
+Otherwise from a machine with Python:
 
 ```bash
-# From your local machine, in the project root:
 psql "$SUPABASE_URL_with_password" -f db/schema.sql
 python -m db.seed_all
 ```
@@ -147,6 +152,13 @@ These changes take effect on the **next** deployment, not retroactively.
 4. **Redeploy**: Deployments tab → click **...** → **Retry
    deployment**. (Env vars don't take effect on existing deployments.)
 
+> **Heads-up:** Cloudflare Pages does NOT auto-build on every merge to
+> `main`. If a build is missing for a recent commit, trigger one
+> manually: Pages → Deployments → **Create deployment** (top right).
+> Sign that you're stuck on a stale build: `/api/health` doesn't yet
+> include the fields `project_ref`, `tables_seen`, or `company_samples`
+> (those landed in the diagnostic upgrade — commit `c7167db`).
+
 ---
 
 ## Step 5 — Verify (2 min)
@@ -167,6 +179,11 @@ trigger a redeploy.
 
 If `/generate` errors at the streaming step with "ANTHROPIC_API_KEY not
 configured", same thing.
+
+`/api/health` is the canonical first-line diagnostic. It reports env
+var presence, the Supabase `project_ref` it's pointed at, which tables
+it can see, the first 3 company rows, and the `nodejs_compat` runtime
+status. No secrets leak.
 
 ---
 
@@ -218,6 +235,7 @@ runtime simulation locally.
 | `/jcr` | Reconciliation table + KPIs | ✅ |
 | `/postmortem` | Loss postmortem agent | ✅ |
 | `/insights` | Intelligence dashboard (read-only) | ✅ |
+| `/api/health` | Diagnostic JSON (env, Supabase, runtime) | ✅ |
 | `/onboard` | Past-quote upload flow | 🚧 TODO |
 | `/compare` | Side-by-side bid compare | 🚧 TODO |
 | `/converse` | Ask-about-a-bid chat with compaction beta | 🚧 TODO |
