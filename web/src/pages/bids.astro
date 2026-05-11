@@ -18,6 +18,44 @@ Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate
 Astro.response.headers.set('cdn-cache-control', 'no-store');
 Astro.response.headers.set('x-ssr-build-tag', SSR_BUILD_TAG);
 
+// Diagnostic short-circuit: hitting /bids?diag=1 returns a JSON dump
+// of the runtime detection booleans Astro uses to pick rendering
+// strategy. We want to know what `isNode` evaluates to in production,
+// because on Cloudflare with nodejs_compat enabled `process` may look
+// Node-like enough that Astro picks renderToAsyncIterable (which
+// Cloudflare's Response doesn't accept as a body — coerces to
+// "[object Object]"). API routes work because they construct
+// `new Response(string)` directly.
+if (Astro.url.searchParams.get('diag') === '1') {
+  const procTag =
+    typeof process !== 'undefined'
+      ? Object.prototype.toString.call(process)
+      : '(undefined)';
+  const isNodeLike =
+    typeof process !== 'undefined' && procTag === '[object process]';
+  const diag = {
+    build_tag: SSR_BUILD_TAG,
+    timestamp: new Date().toISOString(),
+    runtime: {
+      typeof_process: typeof process,
+      typeof_Deno: typeof (globalThis as any).Deno,
+      process_toString_tag: procTag,
+      astro_isNode_would_be: isNodeLike,
+      has_ReadableStream: typeof ReadableStream !== 'undefined',
+      has_TextEncoder: typeof TextEncoder !== 'undefined',
+      navigator_userAgent: (globalThis as any).navigator?.userAgent ?? null,
+    },
+  };
+  return new Response(JSON.stringify(diag, null, 2), {
+    status: 200,
+    headers: {
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+      'x-ssr-build-tag': SSR_BUILD_TAG,
+    },
+  });
+}
+
 let renderError: unknown = null;
 let companies: Awaited<ReturnType<typeof getCompanies>> = [];
 let companyId: string | undefined;
