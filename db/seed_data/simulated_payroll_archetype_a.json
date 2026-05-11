@@ -1,0 +1,36 @@
+{
+  "company": "Honolulu Stucco & Exteriors LLC",
+  "basis": "spec v2.0 §8.5 — Hawaii-calibrated burden numbers",
+  "employees": [
+    {"name": "Lead Stucco Mech",  "trade": "lead_stucco_mech",  "ncci": "5022", "base": 46.00, "loaded": 68.08, "burden_pct": 0.480},
+    {"name": "Stucco Journ A",    "trade": "stucco_journeyman", "ncci": "5022", "base": 38.00, "loaded": 55.86, "burden_pct": 0.470},
+    {"name": "Stucco Journ B",    "trade": "stucco_journeyman", "ncci": "5022", "base": 38.00, "loaded": 55.86, "burden_pct": 0.470},
+    {"name": "EIFS Installer",    "trade": "eifs_installer",    "ncci": "5022", "base": 42.00, "loaded": 61.74, "burden_pct": 0.470},
+    {"name": "Sider Lead",        "trade": "siding_lead",       "ncci": "5645", "base": 36.00, "loaded": 54.00, "burden_pct": 0.500},
+    {"name": "Sider",             "trade": "siding_installer",  "ncci": "5645", "base": 30.00, "loaded": 45.00, "burden_pct": 0.500},
+    {"name": "Finisher",          "trade": "finisher",          "ncci": "5022", "base": 32.00, "loaded": 46.72, "burden_pct": 0.460},
+    {"name": "Helper",            "trade": "general_laborer",   "ncci": "5606", "base": 22.00, "loaded": 31.46, "burden_pct": 0.430}
+  ],
+  "burden_breakdown_lead_stucco_mech": {
+    "base_hourly": 46.00,
+    "fica_7.65_pct": 3.52,
+    "futa_0.6_pct_first_7k": 0.04,
+    "suta_hawaii_2.4_pct": 1.10,
+    "workers_comp_5022_at_9.80_per_100": 4.51,
+    "phca_health_employer_share_per_hr": 5.20,
+    "tdi_hawaii_employer": 0.18,
+    "retirement_match_3_pct": 1.38,
+    "pto_accrual": 1.77,
+    "training": 0.22,
+    "loaded_total": 68.08,
+    "burden_pct": 0.480
+  },
+  "schedule_utilization_curve_pct": {
+    "week_0": 78,
+    "week_1": 84,
+    "week_2": 84,
+    "week_3": 62,
+    "week_4": 41,
+    "week_5_to_11": "tapering to ~5% (mostly open)"
+  }
+}
