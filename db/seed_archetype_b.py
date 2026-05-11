@@ -72,7 +72,7 @@ SERVICE_LINES = [
             "Custom finishes beyond standard catalog options",
             "Painting at job site",
         ],
-        "pricing_unit": "per_unit",
+        "pricing_unit": "lump_sum",
         "pricing_range_residential": {"low": 220, "mid": 380, "high": 720},
         "pricing_range_commercial": {"low": 350, "mid": 550, "high": 1200},
         "typical_margin_pct": 28.0,
@@ -233,7 +233,7 @@ def seed_pricing_logic() -> None:
             margin_range_high_pct, capacity_discount_behavior,
             minimum_bid_threshold, payment_terms_default, deposit_pct
         ) VALUES (%s, 1.55, 1.30, 20.0, 30.0, 22.0, 38.0,
-                  'fixed', 800, '50% deposit / net 30', 0.50)
+                  'fixed', 800, '50%% deposit / net 30', 0.50)
         ON CONFLICT (company_id) DO UPDATE SET
             target_margin_pct = EXCLUDED.target_margin_pct,
             capacity_discount_behavior = EXCLUDED.capacity_discount_behavior,
@@ -324,7 +324,7 @@ def _generate_historical_bids() -> None:
                     created_at, draft_generated_at, sent_at,
                     outcome, outcome_competitor, outcome_captured_at,
                     exclusions_applied
-                ) VALUES (%s,%s,%s,%s,%s,'mixed',
+                ) VALUES (%s,%s,%s,%s,%s,'new',
                           %s,%s,%s,%s,%s,
                           %s,%s,%s,
                           %s,%s,%s,
