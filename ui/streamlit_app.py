@@ -674,6 +674,67 @@ elif page == "Intelligence Dashboard":
                        annotation_text="hold-firm threshold")
         st.plotly_chart(fig2, use_container_width=True)
 
+    # Margin-by-service-line heatmap (delivered margin trend over time)
+    st.subheader("Delivered margin by service line — quarterly trend")
+    margin_rows = fetch_all(
+        """
+        SELECT b.service_line,
+               date_trunc('quarter', j.reconciled_at) AS quarter,
+               AVG(j.delivered_margin_pct) AS avg_margin,
+               COUNT(*) AS n_jobs
+        FROM job_cost_reconciliation j
+        JOIN bids b ON b.id = j.bid_id
+        WHERE j.company_id = %s
+        GROUP BY b.service_line, date_trunc('quarter', j.reconciled_at)
+        HAVING COUNT(*) >= 2
+        ORDER BY quarter, b.service_line
+        """,
+        (company_id,),
+    )
+    if margin_rows:
+        df = pd.DataFrame(margin_rows)
+        df["quarter_label"] = pd.to_datetime(df["quarter"]).dt.strftime("%YQ%q")
+        df["avg_margin"] = df["avg_margin"].astype(float)
+        pivot = df.pivot_table(
+            index="service_line", columns="quarter_label",
+            values="avg_margin", aggfunc="mean",
+        ).fillna(0)
+        if not pivot.empty:
+            fig3 = px.imshow(
+                pivot,
+                color_continuous_scale="RdYlGn",
+                color_continuous_midpoint=30,
+                aspect="auto",
+                labels={"color": "Margin %"},
+                title="Color = avg delivered margin %; gaps = no completed jobs that quarter",
+                text_auto=".1f",
+            )
+            fig3.update_xaxes(side="bottom")
+            st.plotly_chart(fig3, use_container_width=True)
+
+            # Surface drift candidates: service lines where the most-recent
+            # quarter is >=3pp below the all-time average for that line
+            with st.expander("🔎 Drift candidates"):
+                latest_col = pivot.columns[-1]
+                drifted = False
+                for sl in pivot.index:
+                    series = pivot.loc[sl][pivot.loc[sl] > 0]
+                    if len(series) < 2:
+                        continue
+                    overall = series.mean()
+                    latest = pivot.loc[sl, latest_col]
+                    if latest > 0 and overall - latest >= 3.0:
+                        drifted = True
+                        st.markdown(
+                            f"- **{sl}** — latest quarter {latest:.1f}% "
+                            f"vs all-time avg {overall:.1f}% "
+                            f"(drift **-{overall - latest:.1f}pp**)"
+                        )
+                if not drifted:
+                    st.caption("No service line shows >=3pp drift in the latest quarter.")
+    else:
+        st.caption("Not enough reconciled jobs per quarter to render the heatmap.")
+
 
 # ─── Page: Cross-archetype compare ─────────────────────────────
 elif page == "Cross-archetype compare":

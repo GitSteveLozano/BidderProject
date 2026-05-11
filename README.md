@@ -4,9 +4,9 @@ Multi-agent AI platform that helps SMB specialty contractors operate more
 effectively across the full bid lifecycle — from RFP/scope intake through
 job-cost reconciliation.
 
-> **Status:** Day 0–2 scaffold per
-> `docs/architecture_spec_v2.md`. Most agent logic is contract-only; the
-> orchestrator state machine, schemas, and seed data are real.
+> **Static site:** <https://gitstevelozano.github.io/BidderProject/>
+> (auto-deploys from `docs/`).
+> **Interactive demo:** local only, see [Running locally](#running-locally) below.
 
 ## Architecture in one paragraph
 
