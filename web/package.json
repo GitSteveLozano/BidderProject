@@ -7,8 +7,8 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "wrangler pages dev ./dist --port 4321 --compatibility-date 2026-01-01",
-    "deploy": "astro build && wrangler pages deploy ./dist",
+    "preview": "wrangler pages dev ./dist --port 4321 --compatibility-date 2026-01-01 --compatibility-flags=nodejs_compat",
+    "deploy": "astro build && wrangler pages deploy ./dist --project-name=proservice-bid-intelligence --commit-dirty=true",
     "typecheck": "astro check && tsc --noEmit"
   },
   "dependencies": {

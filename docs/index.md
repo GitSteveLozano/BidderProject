@@ -19,7 +19,7 @@ runs at one of three URLs depending on how it's deployed:
 
 | Path | Cost | Time to live demo | Best for |
 | --- | --- | --- | --- |
-| **🟢 Cloudflare Pages SPA** *(in development — see `/web/`)* | $0 | already auto-deploys on push | Customer-facing product |
+| **🟢 Cloudflare Pages SPA** *(see [20-min quickstart]({{ "/deployment/cloudflare-pages-quickstart.html" | relative_url }}))* | $0 | ~20 min one-time setup | Customer-facing product |
 | **🟡 Streamlit Cloud + Supabase** *(see [15-min quickstart]({{ "/deployment/streamlit-cloud-quickstart.html" | relative_url }}))* | $0 | ~15 min one-time setup | Internal demos, fastest path |
 | **🔵 Local `docker compose up`** *(see [README](https://github.com/GitSteveLozano/BidderProject))* | $0 | ~5 min | Development, full stack with API + Celery + Postgres |
 

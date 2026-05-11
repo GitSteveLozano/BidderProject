@@ -70,23 +70,35 @@ Visit `http://localhost:4321/generate` to test the streaming bid flow.
 
 ## Deploy to Cloudflare Pages
 
-1. Create a Cloudflare Pages project pointing at this repo, **subdirectory
-   `web/`**:
+> Full step-by-step at
+> [`docs/deployment/cloudflare-pages-quickstart.md`](../docs/deployment/cloudflare-pages-quickstart.md).
+> The summary below assumes you've already deployed to Pages before.
+
+1. Create a Cloudflare Pages project pointing at this repo, **with Root
+   directory set to `web`**:
    - <https://dash.cloudflare.com/pages> → Create application → Connect to Git
    - Repository: `GitSteveLozano/BidderProject`
    - Production branch: `main`
-   - Build command: `npm run build`
+   - **Root directory (Advanced): `web`**
+   - Build command: `npm install && npm run build`
    - Build output directory: `dist`
-   - Root directory: `web`
+   - Environment variable (build): `NODE_VERSION=20`
 
-2. **Settings → Environment variables** → add **encrypted** entries for
+2. **Settings → Functions** → set:
+   - **Compatibility date:** `2026-01-01`
+   - **Compatibility flags:** `nodejs_compat` (required for the
+     Anthropic SDK + Supabase client)
+
+   Do this for both **Production** and **Preview** environments.
+
+3. **Settings → Environment variables** → add **encrypted** entries for
    the production environment:
    - `ANTHROPIC_API_KEY`
    - `SUPABASE_URL`
    - `SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_KEY`
 
-3. Trigger a deploy. Cloudflare builds and serves at
+4. Trigger a deploy. Cloudflare builds and serves at
    `https://<project-name>.pages.dev`. Custom domain: Settings → Custom
    domains.
 
