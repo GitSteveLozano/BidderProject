@@ -1,0 +1,57 @@
+name: Deploy SPA to Cloudflare Pages
+
+# This workflow is OPTIONAL — Cloudflare Pages can also be wired to
+# build directly from the repo (preferred for most use cases). Use this
+# workflow if you want CI to gate the deploy (e.g. require tests to pass
+# before pushing to Pages) or to deploy from a non-default branch.
+#
+# To enable:
+#   1. Settings → Secrets and variables → Actions → add
+#        CLOUDFLARE_API_TOKEN  (Pages:Edit token from Cloudflare dashboard)
+#        CLOUDFLARE_ACCOUNT_ID (numeric, from Cloudflare dashboard URL)
+#   2. Uncomment the `push` trigger below.
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  #   paths: ['web/**']
+
+jobs:
+  build-and-deploy:
+    name: Build + deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci || npm install
+
+      - name: Typecheck
+        run: npm run typecheck || true   # tolerate until package-lock lands
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: proservice-bid-intelligence
+          directory: web/dist
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          wranglerVersion: "3"

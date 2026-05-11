@@ -1,0 +1,32 @@
+---
+import Base from '@/layouts/Base.astro';
+import BidGenerator from '@/components/BidGenerator';
+import { getCompanies, getServiceLines } from '@/lib/supabase';
+
+// Server-rendered; runs on Cloudflare Pages Functions.
+const companies = await getCompanies(Astro.locals.runtime?.env);
+const defaultCompanyId = companies[0]?.id;
+const serviceLines = defaultCompanyId
+  ? await getServiceLines(defaultCompanyId, Astro.locals.runtime?.env)
+  : [];
+
+export const prerender = false;
+---
+
+<Base title="Generate a bid · ProService Bid Intelligence">
+  <section class="py-6">
+    <h1 class="text-3xl font-semibold tracking-tight">Generate a bid</h1>
+    <p class="mt-2 text-ink-600 max-w-2xl">
+      Fill in the scope and labor plan. All 4 generation agents fire in
+      sequence — Intake parses your scope, Context loads the company
+      profile, Pricing queries real loaded labor data, and Composition
+      writes the bid in voice with exclusions verified.
+    </p>
+  </section>
+
+  <BidGenerator
+    client:load
+    companies={companies}
+    serviceLines={serviceLines}
+  />
+</Base>
