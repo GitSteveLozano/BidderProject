@@ -61,8 +61,19 @@ Keep the service_role key safe; it bypasses Postgres RLS.
 
 ## Step 2 — Connect Cloudflare Pages to the repo (5 min)
 
-1. <https://dash.cloudflare.com> → **Workers & Pages** → **Pages** tab
-   → **Create application** → **Connect to Git**.
+> ⚠️ **Critical:** Make sure you create this as a **Pages** project, not
+> a **Workers Builds** project. The two products look almost identical
+> in the dashboard's merged UI but build and deploy completely
+> differently. If your project Settings page shows a **"Deploy command"**
+> field, you've got Workers Builds — delete it and recreate as Pages.
+> Workers Builds defaults its deploy command to `npx wrangler deploy`
+> (a Workers command), which fails immediately on an Astro+Pages output
+> with: *"It looks like you've run a Workers-specific command in a
+> Pages project."*
+
+1. <https://dash.cloudflare.com> → **Workers & Pages** → click the
+   **Pages** tab at the top (NOT Workers) → **Create application** →
+   **Connect to Git**.
 2. Authorize Cloudflare to read your GitHub repos. Pick
    `GitSteveLozano/BidderProject`.
 3. **Set up builds and deployments** — these settings tell Cloudflare to
