@@ -110,6 +110,21 @@ def reconcile_job(
         """,
         (actual_hours, actual_total, delivered_margin, bid_id),
     )
+    from core.audit import record as audit_record
+
+    audit_record(
+        entity_type="reconciliation",
+        entity_id=bid_id,
+        company_id=company_id,
+        action="reconcile",
+        actor="jcr_agent",
+        diff={
+            "quoted_price": quoted_price,
+            "actual_total_cost": actual_total,
+            "delivered_margin_pct": delivered_margin,
+            "variance_labor_hours_pct": var_hours,
+        },
+    )
     return {
         "bid_id": bid_id,
         "quoted_price": quoted_price,

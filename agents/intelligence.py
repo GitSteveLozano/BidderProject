@@ -222,19 +222,25 @@ def run_weekly_analysis(company_id: UUID | str) -> list[dict]:
     return generated
 
 
+# Frozen system prompt for Intelligence narratives. Stable across every
+# call within a weekly-analysis run, so cache it.
+_INTELLIGENCE_SYSTEM = (
+    "You write 3-5 sentence operating-intelligence findings for a specialty "
+    "contractor. Be specific with numbers from the facts. DO NOT invent "
+    "numbers. End with an actionable recommendation."
+)
+
+
 def _llm_insight_narrative(category: str, facts: dict, guidance: str) -> str:
     from core.anthropic_client import complete
     from core.settings import get_settings
 
     return complete(
         model=get_settings().model_sonnet,
-        system=(
-            "You write 3-5 sentence operating-intelligence findings for a specialty "
-            "contractor. Be specific with numbers from the facts. DO NOT invent "
-            "numbers. End with an actionable recommendation."
-        ),
+        system=_INTELLIGENCE_SYSTEM,
+        cache_system=True,  # caches across multiple insight calls in one analysis
         user=(
-            f"Category: {category}\nFacts: {json.dumps(facts, default=str)}\n\n"
+            f"Category: {category}\nFacts: {json.dumps(facts, default=str, sort_keys=True)}\n\n"
             f"Guidance: {guidance}\n\nWrite the finding."
         ),
         max_tokens=512,

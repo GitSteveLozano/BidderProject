@@ -42,6 +42,10 @@ dev = [
     "mypy>=1.9.0",
     "httpx>=0.27.0",
 ]
+docs = [
+    "weasyprint>=61.0",
+    "markdown>=3.5.0",
+]
 
 [tool.setuptools]
 packages = [
@@ -66,6 +70,33 @@ ignore = ["E501"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = [
+    "integration: tests requiring a real Postgres+pgvector instance (set INTEGRATION_DB=true)",
+]
+addopts = "-m 'not integration'"
+
+[tool.coverage.run]
+source = ["agents", "tools", "core", "api", "db"]
+omit = [
+    "*/migrations/*",
+    "*/__init__.py",
+    "db/seed*.py",      # seed scripts are demo data, not load-bearing logic
+    "core/celery_app.py",
+    "core/tasks.py",    # exercised in deploy, not unit tests
+    "ui/*",             # Streamlit UI tested by hand
+]
+branch = true
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@overload",
+]
+show_missing = true
+skip_covered = false
+precision = 1
 
 [tool.mypy]
 python_version = "3.11"

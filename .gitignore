@@ -44,6 +44,9 @@ data/processed/
 # Streamlit
 .streamlit/secrets.toml
 
+# Generated PDFs
+dist/*.pdf
+
 # Local DB dumps
 *.dump
 *.sqlite

@@ -79,6 +79,18 @@ intelligence:
 reset:
     python cli.py reset --yes
 
+# Compile docs/*.md (brief, spec, storyboard) to PDFs in dist/
+brief:
+    python scripts/build_brief.py
+
+# Tests with coverage report
+cov:
+    pytest --cov --cov-report=term-missing --cov-report=html
+
+# Show coverage summary
+cov-summary:
+    pytest --cov --cov-report=term --no-header -q
+
 # Docker Compose: bring up the stack
 up:
     docker compose up -d --build

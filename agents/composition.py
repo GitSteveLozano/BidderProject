@@ -34,15 +34,18 @@ DO NOT:
 
 Return ONLY the markdown bid document — no preamble, no code fence."""
 
-USER_TEMPLATE = """COMPANY VOICE:
+# Per-company stable context. Gets sent as a system_extra block with
+# cache_control — caches across every bid for the same company.
+COMPANY_CONTEXT_TEMPLATE = """COMPANY VOICE PROFILE (stable for this company across all bids):
 {voice}
 
 SERVICE LINE: {service_line}
 TYPICAL SCOPE TEMPLATE: {scope_template}
 STANDARD EXCLUSIONS (include ALL of these in the Exclusions section):
-{exclusions_list}
+{exclusions_list}"""
 
-SCOPE FROM INTAKE:
+# Per-bid volatile context. Stays in the user message.
+USER_TEMPLATE = """SCOPE FROM INTAKE:
 {scope_summary}
 
 CLIENT:
@@ -116,24 +119,36 @@ def compose_bid(
 
     import json
 
+    # Build the per-company stable context block. This goes into
+    # system_extra so it caches across every bid for this company.
+    # IMPORTANT: deterministic serialization (sort_keys) so the bytes
+    # don't vary across requests due to dict-iteration order.
+    company_context = COMPANY_CONTEXT_TEMPLATE.format(
+        voice=json.dumps(voice_summary, default=str, indent=2, sort_keys=True),
+        service_line=service_line,
+        scope_template=sl.get("typical_scope_text") or "",
+        exclusions_list="\n".join(f"  - {e}" for e in exclusions_required) or "  (none)",
+    )
+
+    # Per-bid volatile content stays in the user message.
+    user_msg = USER_TEMPLATE.format(
+        scope_summary=scope_summary,
+        client_name=client_name,
+        client_address=client_address,
+        target_price=pricing_breakdown["target_price"],
+        labor_hours=pricing_breakdown["labor"]["total_hours"],
+        labor_subtotal=pricing_breakdown["labor"]["subtotal"],
+        materials_subtotal=pricing_breakdown["materials"].get("subtotal") or 0,
+        overhead_subtotal=pricing_breakdown["overhead"]["subtotal"],
+        target_margin_pct=pricing_breakdown["profit"]["target_margin_pct"],
+    )
+
     draft = complete(
         model=get_settings().model_sonnet,
         system=SYSTEM_PROMPT,
-        user=USER_TEMPLATE.format(
-            voice=json.dumps(voice_summary, default=str, indent=2),
-            service_line=service_line,
-            scope_template=sl.get("typical_scope_text") or "",
-            exclusions_list="\n".join(f"  - {e}" for e in exclusions_required) or "  (none)",
-            scope_summary=scope_summary,
-            client_name=client_name,
-            client_address=client_address,
-            target_price=pricing_breakdown["target_price"],
-            labor_hours=pricing_breakdown["labor"]["total_hours"],
-            labor_subtotal=pricing_breakdown["labor"]["subtotal"],
-            materials_subtotal=pricing_breakdown["materials"].get("subtotal") or 0,
-            overhead_subtotal=pricing_breakdown["overhead"]["subtotal"],
-            target_margin_pct=pricing_breakdown["profit"]["target_margin_pct"],
-        ),
+        system_extra=[company_context],
+        cache_system=True,  # caches SYSTEM_PROMPT + company_context together
+        user=user_msg,
         max_tokens=3000,
         temperature=0.4,
     )

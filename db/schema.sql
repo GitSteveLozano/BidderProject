@@ -330,3 +330,27 @@ DROP TRIGGER IF EXISTS companies_updated_at ON companies;
 CREATE TRIGGER companies_updated_at
     BEFORE UPDATE ON companies
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ────────────────────────────────────────────────────────────────
+-- audit_log (migration 0002) — append-only mutation history
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS audit_log (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    occurred_at     TIMESTAMPTZ DEFAULT NOW(),
+    entity_type     TEXT NOT NULL,
+    entity_id       UUID,
+    company_id      UUID,
+    action          TEXT NOT NULL,
+    actor           TEXT,
+    request_id      TEXT,
+    agent_call_id   UUID,
+    diff            JSONB,
+    notes           TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity
+    ON audit_log (entity_type, entity_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_company
+    ON audit_log (company_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_request
+    ON audit_log (request_id) WHERE request_id IS NOT NULL;

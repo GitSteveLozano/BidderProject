@@ -53,8 +53,13 @@ jobs:
         run: ruff check .
         continue-on-error: true  # ruff config evolves; don't block PRs initially
 
-      - name: Run tests
+      - name: Run unit tests
         run: pytest -v --tb=short
+
+      - name: Run Postgres integration tests
+        env:
+          INTEGRATION_DB: "true"
+        run: pytest -v --tb=short -m integration
 
       - name: Build Docker image
         if: github.event_name == 'push'

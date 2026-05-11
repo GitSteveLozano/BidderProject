@@ -40,6 +40,7 @@ def _record_transition(
 def transition(bid_id: UUID | str, to_state: BidState | str,
                triggered_by: str = "auto", notes: str = "") -> dict:
     """Transition a bid to a new state. Raises if transition is invalid."""
+    from core.audit import record as audit_record
     from core.db import execute, fetch_one
 
     bid_id = str(bid_id)
@@ -54,6 +55,14 @@ def transition(bid_id: UUID | str, to_state: BidState | str,
         raise ValueError(f"invalid transition {current} -> {target}")
     execute("UPDATE bids SET state = %s WHERE id = %s", (target, bid_id))
     _record_transition(bid_id, current, target, triggered_by, str(uuid4()), notes)
+    audit_record(
+        entity_type="bid",
+        entity_id=bid_id,
+        action="transition",
+        actor=triggered_by,
+        diff={"state": {"from": current, "to": target}},
+        notes=notes,
+    )
     return {"bid_id": bid_id, "from_state": current, "state": target}
 
 
@@ -87,6 +96,17 @@ def create_bid(
     )
     _record_transition(bid_id, None, "RFP_RECEIVED", "create_bid", None,
                        "bid created from scope input")
+    from core.audit import record as audit_record
+
+    audit_record(
+        entity_type="bid",
+        entity_id=bid_id,
+        company_id=company_id,
+        action="create",
+        actor="human",
+        diff={"client_name": client_name, "service_line": service_line,
+              "client_segment": client_segment},
+    )
     return bid_id
 
 
@@ -226,9 +246,18 @@ def send_bid(bid_id: UUID | str) -> dict:
 def capture_outcome(bid_id: UUID | str, outcome: str, reason: str | None = None,
                     competitor: str | None = None, winning_bid: float | None = None) -> dict:
     """Capture WON / LOST / STALLED / NO_DECISION outcomes."""
+    from core.audit import record as audit_record
     from core.db import execute
 
     bid_id = str(bid_id)
+    audit_record(
+        entity_type="bid",
+        entity_id=bid_id,
+        action="outcome",
+        actor="human",
+        diff={"outcome": outcome, "reason": reason, "competitor": competitor,
+              "winning_bid": winning_bid},
+    )
     execute(
         """
         UPDATE bids

@@ -179,7 +179,22 @@ elif page == "Bid Generation":
             f"{int(pb['capacity_utilization_at_start']*100)}%",
             pb["capacity_modifier"]["action"],
         )
-        st.markdown("**Pricing rationale:** " + pb["narrative"])
+        st.markdown("**Pricing rationale:** " + (pb.get("narrative") or "—"))
+
+        # If the tool-use Pricing variant ran, render the actual LLM tool
+        # call sequence — strongest demo angle for "not a GPT wrapper".
+        if pb.get("_tool_trail"):
+            with st.expander("🔧 Claude tool-use trail (real anthropic.messages tools= loop)"):
+                st.caption(
+                    "Each row is a tool call Claude itself decided to make. "
+                    "Numbers come from tool_result blocks, not from text."
+                )
+                for i, step in enumerate(pb["_tool_trail"], 1):
+                    st.markdown(
+                        f"**`{i}`** → `{step['tool']}`"
+                        f"({', '.join(f'{k}={v}' for k, v in step['input'].items())})"
+                    )
+                    st.markdown(f"   ↳ {step['result_summary']}")
 
         with st.expander("🔍 Numeric citation trail (NOT A GPT WRAPPER)"):
             st.caption(
