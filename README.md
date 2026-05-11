@@ -6,7 +6,14 @@ job-cost reconciliation.
 
 > **Static site:** <https://gitstevelozano.github.io/BidderProject/>
 > (auto-deploys from `docs/`).
-> **Interactive demo:** local only, see [Running locally](#running-locally) below.
+>
+> **Interactive demo paths** (pick one):
+> 1. **Streamlit Cloud + Supabase** — ~15 min one-time, free. See
+>    [`docs/deployment/streamlit-cloud-quickstart.md`](docs/deployment/streamlit-cloud-quickstart.md).
+> 2. **Cloudflare Pages SPA** — in development in [`web/`](web/). Astro
+>    + Solid + Cloudflare Functions backend. Long-term product surface.
+> 3. **Local `docker compose up`** — full FastAPI + Postgres + Redis +
+>    Celery stack. See [Running locally](#running-locally) below.
 
 ## Architecture in one paragraph
 

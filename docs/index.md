@@ -8,24 +8,37 @@ title: ProService Bid Intelligence
 > more effectively across the full bid lifecycle — from RFP/scope intake
 > through job-cost reconciliation.
 
-**Status:** Architecture spec + working PoC. Not a GPT wrapper. See the
-[brief]({{ "/brief.html" | relative_url }}) for the full case.
+> 9 specialized agents · tool-grounded numerics · payroll-integrated · 206 unit tests
+
+---
+
+## 🚀 Try the interactive demo
+
+This page is the project's static landing. The actual click-around demo
+runs at one of three URLs depending on how it's deployed:
+
+| Path | Cost | Time to live demo | Best for |
+| --- | --- | --- | --- |
+| **🟢 Cloudflare Pages SPA** *(in development — see `/web/`)* | $0 | already auto-deploys on push | Customer-facing product |
+| **🟡 Streamlit Cloud + Supabase** *(see [15-min quickstart]({{ "/deployment/streamlit-cloud-quickstart.html" | relative_url }}))* | $0 | ~15 min one-time setup | Internal demos, fastest path |
+| **🔵 Local `docker compose up`** *(see [README](https://github.com/GitSteveLozano/BidderProject))* | $0 | ~5 min | Development, full stack with API + Celery + Postgres |
+
+The Cloudflare SPA is the long-term product surface. The Streamlit
+deployment is the fastest path to a clickable URL right now; the local
+docker stack runs the canonical Python FastAPI backend.
 
 ---
 
 ## What this is
 
 Eight specialized agents (Orchestrator, Intake, Context, Pricing,
-Composition, Job-Cost Reconciliation, Follow-up, Intelligence) coordinate
-over a shared Postgres + pgvector context store. The Pricing and JCR
-agents are tool-grounded — they query real loaded labor data rather than
+Composition, Job-Cost Reconciliation, Follow-up, Intelligence) plus a
+9th loss-postmortem extension agent coordinate over a shared
+Postgres + pgvector context store. The Pricing and JCR agents are
+tool-grounded — they query real loaded labor data rather than
 generating numbers. The Composition agent verifies standard exclusions
 before marking a draft ready. The Intelligence agent runs async over
 aggregated state to surface capacity-aware insights.
-
-This page is the static landing for the project. The interactive demo
-runs locally via `docker compose up`; see [Run the demo](#run-the-demo)
-below for the 5-minute setup.
 
 ---
 
