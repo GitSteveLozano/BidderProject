@@ -12,14 +12,19 @@ export const prerender = false;
 Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
 Astro.response.headers.set('cdn-cache-control', 'no-store');
 
-// Diagnostic short-circuit: hitting /bids?diag=1 returns a JSON dump
-// of the runtime detection booleans Astro uses to pick rendering
-// strategy. We want to know what `isNode` evaluates to in production,
-// because on Cloudflare with nodejs_compat enabled `process` may look
-// Node-like enough that Astro picks renderToAsyncIterable (which
-// Cloudflare's Response doesn't accept as a body — coerces to
-// "[object Object]"). API routes work because they construct
-// `new Response(string)` directly.
+// Permanent diagnostic. Bumped whenever the SSR-on-Cloudflare contract
+// changes so we can spot a regression at a glance via /bids?diag=1.
+const SSR_BUILD_TAG = 'streaming-disabled-postbuild';
+Astro.response.headers.set('x-ssr-build-tag', SSR_BUILD_TAG);
+
+// Diagnostic short-circuit: /bids?diag=1 returns a JSON dump of the
+// runtime detection booleans Astro uses to pick rendering strategy.
+// Kept as a long-lived probe so an @astrojs/cloudflare or Workers
+// runtime change can't silently regress us back to the [object Object]
+// failure mode. Root cause: on Workers with nodejs_compat,
+// Object.prototype.toString.call(process) === "[object process]", so
+// Astro's isNode=true → renderToAsyncIterable → Response coerces to
+// "[object Object]". We force streaming=false post-build to dodge it.
 if (Astro.url.searchParams.get('diag') === '1') {
   const procTag =
     typeof process !== 'undefined'
