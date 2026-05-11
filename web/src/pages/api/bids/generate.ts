@@ -70,7 +70,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
   });
 
   // ── 2 + 3. Composition + exclusions verification (streamed) ──
-  const sb = supabaseClient(env, 'anon');
+  const sb = supabaseClient(env, 'service');
   const { data: voice } = await sb
     .from('voice_patterns')
     .select('*')

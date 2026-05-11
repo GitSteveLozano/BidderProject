@@ -37,7 +37,7 @@ export const GET: APIRoute = async ({ locals }) => {
   let supabase: { ok: boolean; companies_count?: number; error?: string };
   if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
     try {
-      const sb = supabaseClient(env, 'anon');
+      const sb = supabaseClient(env, 'service');
       const { count, error } = await sb
         .from('companies')
         .select('*', { count: 'exact', head: true });
