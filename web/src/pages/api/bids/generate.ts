@@ -1,31 +1,43 @@
 /**
  * POST /api/bids/generate
  *
- * Cloudflare Pages Function that runs the 4-agent generation pipeline:
+ * Astro API route (NOT a Cloudflare Pages Function) that runs the
+ * 4-agent generation pipeline:
  *
- *   1. Pricing   — deterministic math over loaded labor + materials +
- *                  capacity (lib/pricing.ts). Numbers come from Supabase
- *                  queries, never the LLM.
- *   2. Composition (streaming) — Anthropic Claude generates the bid in
- *                  the company's voice. Streams tokens via SSE.
- *   3. Exclusions verification — pure substring/keyword check against
- *                  the company's standard exclusions for the service line.
+ *   1. Pricing       — deterministic math over loaded labor + materials
+ *                      + capacity (lib/pricing.ts). Numbers come from
+ *                      Supabase queries, never the LLM.
+ *   2. Composition   — streaming Claude call writing the bid in the
+ *                      company's voice. Tokens streamed as SSE.
+ *   3. Exclusions    — pure substring/keyword check verifying every
+ *                      standard exclusion landed in the draft.
+ *
+ * Lives in src/pages/api/ rather than functions/api/ because Astro's
+ * Cloudflare adapter generates a _worker.js that intercepts ALL
+ * routes — standalone Pages Functions never run.
  *
  * Returns text/event-stream with two event types:
  *   data: {"type": "token", "text": "..."}     — bid draft delta
  *   data: {"type": "done", "result": {...}}    — final structured result
  */
 
+import type { APIRoute } from 'astro';
 import Anthropic from '@anthropic-ai/sdk';
 
-import { client as supabaseClient, type CloudflareEnv } from '../../../src/lib/supabase';
-import { computePricing, type LaborItem } from '../../../src/lib/pricing';
+import { client as supabaseClient } from '@/lib/supabase';
+import { computePricing, type LaborItem } from '@/lib/pricing';
 
-export const onRequestPost: PagesFunction<CloudflareEnv> = async (ctx) => {
-  const env = ctx.env;
+export const prerender = false;
+
+export const POST: APIRoute = async ({ request, locals }) => {
+  const env = locals.runtime?.env;
+  if (!env) {
+    return json({ error: 'Cloudflare runtime not available' }, 500);
+  }
+
   let body: any;
   try {
-    body = await ctx.request.json();
+    body = await request.json();
   } catch {
     return new Response('Invalid JSON', { status: 400 });
   }
@@ -37,7 +49,7 @@ export const onRequestPost: PagesFunction<CloudflareEnv> = async (ctx) => {
     scope_summary,
     labor_plan,
     material_quantity,
-    // client_segment is captured for parity with the FastAPI route
+    // client_segment captured for parity with the FastAPI route
     // (Follow-up cadence reads it on SENT) but the streaming flow
     // here stops at DRAFT_GENERATED / EXCLUSIONS_REVIEW.
     client_segment: _client_segment = 'repeat',
@@ -47,7 +59,7 @@ export const onRequestPost: PagesFunction<CloudflareEnv> = async (ctx) => {
     return new Response('Missing required fields', { status: 400 });
   }
 
-  // ── 1. Pricing ────────────────────────────────────────────────
+  // ── 1. Pricing ───────────────────────────────────────────────
   const pricing = await computePricing({
     companyId: company_id,
     serviceLine: service_line,
@@ -57,7 +69,7 @@ export const onRequestPost: PagesFunction<CloudflareEnv> = async (ctx) => {
     env,
   });
 
-  // ── 2 + 3. Composition + verification (streamed SSE) ─────────
+  // ── 2 + 3. Composition + exclusions verification (streamed) ──
   const sb = supabaseClient(env, 'anon');
   const { data: voice } = await sb
     .from('voice_patterns')
@@ -75,12 +87,8 @@ export const onRequestPost: PagesFunction<CloudflareEnv> = async (ctx) => {
 
   const apiKey = env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return new Response(
-      JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured in Cloudflare environment' }),
-      { status: 500, headers: { 'content-type': 'application/json' } },
-    );
+    return json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
   }
-
   const client = new Anthropic({ apiKey });
 
   const systemPrompt = `You write specialty-contractor bid documents in the
@@ -142,8 +150,8 @@ Write the bid document.`;
         const chunks: string[] = [];
 
         // client.messages.stream() returns a MessageStream that emits
-        // 'text' events for each delta. Use .on() + finalMessage()
-        // per the Anthropic SDK's recommended streaming pattern.
+        // 'text' events for each delta. Use .on() + await
+        // finalMessage() per the Anthropic SDK pattern.
         const msgStream = client.messages.stream({
           model,
           max_tokens: 3000,
@@ -205,6 +213,13 @@ Write the bid document.`;
 };
 
 // ─── helpers ─────────────────────────────────────────────────────
+
+function json(payload: unknown, status: number): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
 
 function pricing_narrative(p: any): string {
   return (

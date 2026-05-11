@@ -4,12 +4,19 @@
  * Loss postmortem agent — TypeScript port of agents/postmortem.py.
  * Reads a LOST bid + competitor info + recent comparable losses, asks
  * Claude for structured analysis, pins numeric facts from the DB row
- * (so the LLM can't fabricate a price delta).
+ * (so the LLM can't fabricate a price delta), and writes an
+ * intelligence_insights row so the finding surfaces on the dashboard.
+ *
+ * Astro API route — see comment in api/health.ts for why this isn't
+ * a Cloudflare Pages Function.
  */
 
+import type { APIRoute } from 'astro';
 import Anthropic from '@anthropic-ai/sdk';
 
-import { client as supabaseClient, type CloudflareEnv } from '../../../src/lib/supabase';
+import { client as supabaseClient } from '@/lib/supabase';
+
+export const prerender = false;
 
 const SYSTEM_PROMPT = `You write structured loss-postmortem analyses for a
 specialty contractor. You are given:
@@ -41,12 +48,13 @@ Rules:
 - Confidence: "low" when n<3 comparable losses, "medium" at 3-7, "high" at 8+.
 - DO NOT invent numbers. Every dollar/percent must come from the facts.`;
 
-export const onRequestPost: PagesFunction<CloudflareEnv> = async (ctx) => {
-  const env = ctx.env;
+export const POST: APIRoute = async ({ request, locals }) => {
+  const env = locals.runtime?.env;
+  if (!env) return jsonError(500, 'Cloudflare runtime not available');
 
   let body: any;
   try {
-    body = await ctx.request.json();
+    body = await request.json();
   } catch {
     return jsonError(400, 'Invalid JSON');
   }
@@ -177,8 +185,6 @@ export const onRequestPost: PagesFunction<CloudflareEnv> = async (ctx) => {
       interpretation: parsed.price_gap_analysis?.interpretation ?? '',
     };
 
-    // Write an intelligence_insights row so the finding surfaces on the
-    // dashboard alongside Intelligence agent output.
     try {
       const headline = `Loss postmortem: ${bid.client_name} (${bid.service_line}, $${ourPrice.toLocaleString()})`;
       const finding = (parsed.likely_reasons ?? []).map((r: string) => `- ${r}`).join('\n')
