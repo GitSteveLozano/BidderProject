@@ -31,18 +31,40 @@ const src = await readFile(adapterPath, 'utf8');
 const needle = 'const app = new App(manifest);';
 const replacement = 'const app = new App(manifest, false); // streaming disabled — see scripts/patch-cf-streaming.mjs';
 
+function fail(msg) {
+  console.error(`[patch-cf-streaming] FAILED: ${msg}`);
+  console.error(`File: ${adapterPath}`);
+  console.error(
+    'The @astrojs/cloudflare adapter output shape may have changed.',
+    'Check createExports() in the dist file and update the needle.',
+  );
+  process.exit(1);
+}
+
 if (src.includes(replacement)) {
   console.log('[patch-cf-streaming] already patched, skipping');
   process.exit(0);
 }
 
 if (!src.includes(needle)) {
-  console.error(`[patch-cf-streaming] FAILED: needle not found in ${adapterPath}`);
-  console.error('The @astrojs/cloudflare adapter output shape may have changed.');
-  console.error('Check createExports() in the dist file and update the needle.');
-  process.exit(1);
+  fail(`needle not found: ${JSON.stringify(needle)}`);
+}
+
+// Guard against ambiguous matches — if `new App(manifest)` appears more
+// than once we can't be sure we patched the right call site.
+const matches = src.split(needle).length - 1;
+if (matches !== 1) {
+  fail(`expected exactly 1 occurrence of needle, found ${matches}`);
 }
 
 const patched = src.replace(needle, replacement);
 await writeFile(adapterPath, patched, 'utf8');
-console.log(`[patch-cf-streaming] patched ${adapterPath} (streaming=false)`);
+
+// Read back and assert the patched marker is present. Catches the case
+// where a future Rollup minification step might strip our comment or
+// rewrite the constructor call.
+const verify = await readFile(adapterPath, 'utf8');
+if (!verify.includes('new App(manifest, false)')) {
+  fail('post-write verification: "new App(manifest, false)" not present in adapter output');
+}
+console.log(`[patch-cf-streaming] patched ${adapterPath} (streaming=false, verified)`);
