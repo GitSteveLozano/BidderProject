@@ -109,6 +109,35 @@ def detect_jcr_patterns_for_all_companies() -> dict:
     return summary
 
 
+def _materialize_margin_snapshots_impl() -> dict:
+    """Refresh logic, extracted so tests can hit it without Celery in
+    the runtime env. The @celery_app.task decorator below imports
+    Celery at module load."""
+    from core.db import execute
+
+    try:
+        execute("REFRESH MATERIALIZED VIEW CONCURRENTLY margin_snapshot_quarterly")
+        return {"refreshed": True, "concurrent": True}
+    except Exception as e:
+        logger.warning(
+            "concurrent refresh failed (%s) — retrying non-concurrent", e
+        )
+        try:
+            execute("REFRESH MATERIALIZED VIEW margin_snapshot_quarterly")
+            return {"refreshed": True, "concurrent": False}
+        except Exception as ex:
+            logger.exception("margin_snapshot_quarterly refresh failed")
+            return {"refreshed": False, "error": str(ex)}
+
+
+@celery_app.task(name="core.tasks.materialize_margin_snapshots")
+def materialize_margin_snapshots() -> dict:
+    """Refresh `margin_snapshot_quarterly`. Concurrent refresh preserves
+    reads during refresh; falls back to a blocking refresh if the
+    unique index isn't there yet (first run before migration 0003)."""
+    return _materialize_margin_snapshots_impl()
+
+
 @celery_app.task(name="core.tasks.advance_stalled_bids")
 def advance_stalled_bids() -> dict:
     """SENT/FOLLOW_UP_*_SENT bids with 14+ days no response -> STALLED.

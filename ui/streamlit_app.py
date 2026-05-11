@@ -49,6 +49,7 @@ page = st.sidebar.radio(
         "Active Bids",
         "Compare Bids",
         "Loss Postmortem",
+        "Ask About a Bid",
         "Follow-ups",
         "Job-Cost Reconciliation",
         "Intelligence Dashboard",
@@ -829,6 +830,99 @@ elif page == "Loss Postmortem":
                 st.json(result)
 
 
+# ─── Page: Ask About a Bid (conversational) ───────────────────
+elif page == "Ask About a Bid":
+    st.header("Ask about a bid")
+    st.caption(
+        "Pick a bid, then chat with the system about it. Uses Anthropic's "
+        "compaction beta (`compact-2026-01-12`) so the conversation can "
+        "run long without hitting context limits."
+    )
+
+    all_bids = fetch_all(
+        """
+        SELECT id, client_name, service_line, estimated_value, state, outcome
+        FROM bids WHERE company_id = %s
+        ORDER BY created_at DESC LIMIT 100
+        """,
+        (company_id,),
+    )
+    if not all_bids:
+        st.info("No bids for this company yet.")
+    else:
+        bid_options = {
+            f"{b['client_name'][:30]} — {b['service_line']} "
+            f"(${float(b['estimated_value'] or 0):,.0f}, {b['state']})": b["id"]
+            for b in all_bids
+        }
+        picked_label = st.selectbox(
+            "Bid to chat about", list(bid_options.keys()),
+            key="converse_bid_picker",
+        )
+        picked_bid_id = bid_options[picked_label]
+
+        # New session_state slot per bid so switching bids doesn't
+        # leak compaction history across contexts (and so the
+        # alternation user/assistant invariant holds).
+        history_key = f"converse_history__{picked_bid_id}"
+        if history_key not in st.session_state:
+            st.session_state[history_key] = []
+
+        # Render history
+        for msg in st.session_state[history_key]:
+            role = msg["role"]
+            content = msg["content"]
+            if isinstance(content, list):
+                # Assistant turn — extract text from blocks
+                text = "".join(
+                    getattr(b, "text", "") for b in content
+                    if getattr(b, "type", None) == "text"
+                )
+            else:
+                text = content
+            with st.chat_message(role):
+                st.markdown(text or "_(no text content)_")
+
+        prompt = st.chat_input("Ask anything about this bid")
+        if prompt:
+            with st.chat_message("user"):
+                st.markdown(prompt)
+            with st.chat_message("assistant"):
+                placeholder = st.empty()
+                placeholder.markdown("_thinking…_")
+                try:
+                    from agents import converse
+
+                    result = converse.reply(
+                        bid_id=picked_bid_id,
+                        messages=st.session_state[history_key],
+                        user_message=prompt,
+                        enable_compaction=True,
+                    )
+                    placeholder.markdown(result["assistant_text"])
+                    st.session_state[history_key] = result["messages"]
+                    if result.get("compaction_event"):
+                        st.caption(
+                            "ℹ️  Compaction event — earlier turns were "
+                            "summarized server-side to stay under the "
+                            "context window."
+                        )
+                except Exception as e:
+                    placeholder.error(f"Error: {e}")
+
+        if st.session_state[history_key]:
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Reset conversation", key="converse_reset"):
+                    st.session_state[history_key] = []
+                    st.rerun()
+            with c2:
+                turn_count = (
+                    len(st.session_state[history_key]) // 2
+                )
+                st.caption(f"{turn_count} turn(s) in this conversation.")
+
+
 # ─── Page: Follow-ups ──────────────────────────────────────────
 elif page == "Follow-ups":
     st.header("Layer 3 — Follow-up Automation")
@@ -966,21 +1060,43 @@ elif page == "Intelligence Dashboard":
 
     # Margin-by-service-line heatmap (delivered margin trend over time)
     st.subheader("Delivered margin by service line — quarterly trend")
-    margin_rows = fetch_all(
-        """
-        SELECT b.service_line,
-               date_trunc('quarter', j.reconciled_at) AS quarter,
-               AVG(j.delivered_margin_pct) AS avg_margin,
-               COUNT(*) AS n_jobs
-        FROM job_cost_reconciliation j
-        JOIN bids b ON b.id = j.bid_id
-        WHERE j.company_id = %s
-        GROUP BY b.service_line, date_trunc('quarter', j.reconciled_at)
-        HAVING COUNT(*) >= 2
-        ORDER BY quarter, b.service_line
-        """,
-        (company_id,),
-    )
+    # Prefer the materialized snapshot (migration 0003); fall back to
+    # the live query when the view doesn't exist (older deploys) or
+    # has no rows for this company.
+    margin_rows: list[dict] = []
+    try:
+        margin_rows = fetch_all(
+            """
+            SELECT service_line, quarter, avg_margin_pct AS avg_margin,
+                   n_jobs
+            FROM margin_snapshot_quarterly
+            WHERE company_id = %s AND n_jobs >= 2
+            ORDER BY quarter, service_line
+            """,
+            (company_id,),
+        )
+        snapshot_used = bool(margin_rows)
+    except Exception:
+        snapshot_used = False
+    if not margin_rows:
+        margin_rows = fetch_all(
+            """
+            SELECT b.service_line,
+                   date_trunc('quarter', j.reconciled_at) AS quarter,
+                   AVG(j.delivered_margin_pct) AS avg_margin,
+                   COUNT(*) AS n_jobs
+            FROM job_cost_reconciliation j
+            JOIN bids b ON b.id = j.bid_id
+            WHERE j.company_id = %s
+            GROUP BY b.service_line, date_trunc('quarter', j.reconciled_at)
+            HAVING COUNT(*) >= 2
+            ORDER BY quarter, b.service_line
+            """,
+            (company_id,),
+        )
+        snapshot_used = False
+    if snapshot_used:
+        st.caption("✨ Served from nightly margin snapshot (fast path).")
     if margin_rows:
         df = pd.DataFrame(margin_rows)
         df["quarter_label"] = pd.to_datetime(df["quarter"]).dt.strftime("%YQ%q")

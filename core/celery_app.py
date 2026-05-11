@@ -53,4 +53,8 @@ celery_app.conf.beat_schedule = {
         "task": "core.tasks.advance_stalled_bids",
         "schedule": crontab(hour=9, minute=0),
     },
+    "materialize-margin-snapshots-nightly-3am": {
+        "task": "core.tasks.materialize_margin_snapshots",
+        "schedule": crontab(hour=3, minute=0),
+    },
 }

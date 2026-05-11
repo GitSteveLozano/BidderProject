@@ -354,3 +354,26 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_company
     ON audit_log (company_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_audit_log_request
     ON audit_log (request_id) WHERE request_id IS NOT NULL;
+
+-- ────────────────────────────────────────────────────────────────
+-- margin_snapshot_quarterly (migration 0003) — fast heatmap source
+-- ────────────────────────────────────────────────────────────────
+CREATE MATERIALIZED VIEW IF NOT EXISTS margin_snapshot_quarterly AS
+SELECT
+    j.company_id,
+    b.service_line,
+    date_trunc('quarter', j.reconciled_at)::date AS quarter,
+    AVG(j.delivered_margin_pct)::numeric(6,2) AS avg_margin_pct,
+    AVG(j.variance_labor_hours_pct)::numeric(6,2) AS avg_labor_var_pct,
+    AVG(j.variance_total_cost_pct)::numeric(6,2) AS avg_cost_var_pct,
+    SUM(b.estimated_value)::numeric(14,2) AS total_revenue,
+    COUNT(*) AS n_jobs,
+    NOW() AS refreshed_at
+FROM job_cost_reconciliation j
+JOIN bids b ON b.id = j.bid_id
+GROUP BY j.company_id, b.service_line, date_trunc('quarter', j.reconciled_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_margin_snapshot_pk
+    ON margin_snapshot_quarterly (company_id, service_line, quarter);
+CREATE INDEX IF NOT EXISTS idx_margin_snapshot_company
+    ON margin_snapshot_quarterly (company_id, quarter);
