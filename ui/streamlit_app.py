@@ -142,7 +142,32 @@ elif page == "Bid Generation":
             primary_hours = st.number_input("Primary trade hours", 40, 2000, 312, step=8)
             helper_hours = st.number_input("Helper / laborer hours", 0, 1000, 80, step=8)
             material_qty = st.number_input("Material quantity (sqft / lf)", 0.0, 50000.0, 3200.0)
-        submitted = st.form_submit_button("Run all 4 generation agents")
+        cost_estimate_col, submit_col = st.columns([1, 2])
+        with cost_estimate_col:
+            estimate_cost = st.form_submit_button("Estimate input cost")
+        with submit_col:
+            submitted = st.form_submit_button("Run all 4 generation agents")
+
+    if estimate_cost:
+        from core.cost import estimate_bid_generation_cost
+
+        with st.spinner("Counting tokens..."):
+            est = estimate_bid_generation_cost(
+                company_id=company_id,
+                service_line=service_line,
+                scope_summary=scope_summary,
+            )
+        if est.get("input_tokens") is not None:
+            ic1, ic2, ic3 = st.columns(3)
+            ic1.metric("Input tokens", f"{est['input_tokens']:,}")
+            ic2.metric("Est. input cost", f"${est['estimated_input_cost_usd']:.4f}")
+            ic3.metric("Model", est.get("model") or "—")
+            st.caption(
+                "Cost estimate uses Anthropic's `count_tokens` endpoint. "
+                "Output tokens are not included — typically 2-4× input for bid generation."
+            )
+        else:
+            st.warning(f"Cost estimate unavailable: {est.get('error', 'unknown')}")
 
     if submitted:
         bid_id = orchestrator.create_bid(
@@ -308,6 +333,32 @@ elif page == "Active Bids":
                     )
             else:
                 st.write("(no transitions recorded)")
+
+            # Audit log
+            audit_rows = fetch_all(
+                """
+                SELECT occurred_at, action, actor, diff, notes, request_id, agent_call_id
+                FROM audit_log
+                WHERE entity_type IN ('bid', 'reconciliation')
+                  AND entity_id = %s
+                ORDER BY occurred_at ASC
+                """,
+                (bid["id"],),
+            )
+            if audit_rows:
+                with st.expander(f"Audit log ({len(audit_rows)} entries)"):
+                    for r in audit_rows:
+                        actor_emoji = {
+                            "human": "👤", "auto": "🤖", "timer": "⏱",
+                            "jcr_agent": "📊", "intelligence_agent": "🧠",
+                        }.get(r.get("actor"), "•")
+                        st.markdown(
+                            f"`{r['occurred_at']:%H:%M:%S}` {actor_emoji} "
+                            f"**{r['action']}** by `{r.get('actor')}`"
+                            + (f" — _{r['notes']}_" if r.get("notes") else "")
+                        )
+                        if r.get("diff"):
+                            st.json(r["diff"], expanded=False)
 
             # Exclusions audit
             if bid.get("exclusions_applied") or bid.get("exclusions_missing"):
