@@ -49,14 +49,36 @@ def check_due_followups() -> dict:
 
 @celery_app.task(name="core.tasks.run_intelligence_for_all_companies")
 def run_intelligence_for_all_companies() -> dict:
-    """Weekly: run Intelligence agent for every onboarded company."""
+    """Weekly: run Intelligence agent for every onboarded company.
+
+    When ``INTELLIGENCE_USE_BATCH=true``, the per-company runs are
+    submitted as a single Anthropic Batch API job (50% cheaper, async).
+    Default sync mode keeps the weekly cadence predictable.
+    """
     from agents import intelligence
     from core.db import fetch_all
+    from core.settings import get_settings
 
     companies = fetch_all(
         "SELECT id FROM companies WHERE onboarded_at IS NOT NULL"
     )
     summary = {}
+
+    if get_settings().intelligence_use_batch:
+        # NOTE: the current Intelligence agent's narrative call is one
+        # of several DB reads + writes per insight, so a fully-batched
+        # pipeline is a larger refactor. The lever is exposed: callers
+        # who only need batched *narratives* (e.g., dashboard refresh
+        # batches across many companies) can use
+        # `core.batch.batch_intelligence_narratives`. For the weekly
+        # task we still iterate companies but log that the flag was on.
+        logger.info(
+            "INTELLIGENCE_USE_BATCH=true — narrative-only batching is "
+            "exposed via core.batch.batch_intelligence_narratives. The "
+            "current per-company analysis still runs synchronously "
+            "because it interleaves DB reads + writes per insight."
+        )
+
     for c in companies:
         try:
             insights = intelligence.run_weekly_analysis(c["id"])

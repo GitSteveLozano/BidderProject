@@ -171,6 +171,21 @@ class FollowUpDraftIn(BaseModel):
     sequence_number: int
 
 
+@router.post("/{bid_id}/postmortem")
+def run_postmortem(bid_id: UUID) -> dict:
+    """Run the loss postmortem agent on a LOST bid.
+
+    Writes an intelligence_insights row (category='competitor') and
+    returns the structured analysis.
+    """
+    from agents import postmortem
+
+    try:
+        return postmortem.analyze_loss(bid_id, write_insight=True)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/{bid_id}/follow-up/draft")
 def draft_follow_up(bid_id: UUID, payload: FollowUpDraftIn) -> dict:
     from agents import follow_up

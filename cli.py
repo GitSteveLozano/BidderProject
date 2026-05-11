@@ -146,6 +146,33 @@ def cmd_ingest(args) -> int:
     return 0
 
 
+def cmd_batch_intelligence(args) -> int:
+    """Submit a smoke batch through the Anthropic Batch API."""
+    from core.batch import batch_intelligence_narratives
+
+    facts_list = [
+        {
+            "company_id": f"smoke-{i}",
+            "category": "capacity",
+            "facts": {"avg_utilization": 0.75 + i * 0.05},
+            "guidance": "Recommend whether to hold or discount.",
+        }
+        for i in range(args.n)
+    ]
+    out = batch_intelligence_narratives(
+        companies_with_facts=facts_list,
+        system_prompt=(
+            "You write 1-2 sentence operating notes for a specialty "
+            "contractor. Be specific with numbers from the facts."
+        ),
+        poll=args.poll,
+    )
+    import json
+
+    print(json.dumps(out, indent=2, default=str))
+    return 0
+
+
 def cmd_audit_export(args) -> int:
     """Dump audit_log rows as CSV to stdout."""
     from datetime import datetime
@@ -244,6 +271,16 @@ def main(argv: list[str] | None = None) -> int:
     p_ingest.add_argument("--dir", default="data/raw", help="root directory to walk")
     p_ingest.add_argument("--dry-run", action="store_true")
     p_ingest.set_defaults(func=cmd_ingest)
+
+    p_batch = sub.add_parser(
+        "batch-smoke",
+        help="submit a smoke batch through Anthropic's Batch API (50% cheaper, async)",
+    )
+    p_batch.add_argument("--n", type=int, default=3,
+                          help="number of requests to submit (default 3)")
+    p_batch.add_argument("--poll", action="store_true",
+                          help="poll until the batch ends (up to 24h)")
+    p_batch.set_defaults(func=cmd_batch_intelligence)
 
     p_audit = sub.add_parser("audit-export", help="dump audit_log rows as CSV")
     p_audit.add_argument("--company-id", help="filter to one company")

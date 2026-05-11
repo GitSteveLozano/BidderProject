@@ -48,6 +48,7 @@ page = st.sidebar.radio(
         "Bid Generation",
         "Active Bids",
         "Compare Bids",
+        "Loss Postmortem",
         "Follow-ups",
         "Job-Cost Reconciliation",
         "Intelligence Dashboard",
@@ -710,6 +711,122 @@ elif page == "Compare Bids":
                 st.markdown(f"**Right ({len(sk_b)})**")
                 for ex in sorted(sk_b):
                     st.markdown(f"- {ex}")
+
+
+# ─── Page: Loss Postmortem ─────────────────────────────────────
+elif page == "Loss Postmortem":
+    st.header("Loss postmortem")
+    st.caption(
+        "9th agent (extension of Intelligence). Takes a LOST bid + the "
+        "competitor's price, produces structured reasons-why-we-lost and "
+        "next-bid recommendations. Writes an `intelligence_insights` row."
+    )
+
+    lost_bids = fetch_all(
+        """
+        SELECT id, client_name, service_line, estimated_value,
+               outcome_competitor, outcome_winning_bid, outcome_captured_at
+        FROM bids
+        WHERE company_id = %s AND outcome = 'LOST'
+        ORDER BY outcome_captured_at DESC NULLS LAST
+        LIMIT 100
+        """,
+        (company_id,),
+    )
+    if not lost_bids:
+        st.info(
+            "No LOST bids yet for this company. The postmortem agent only "
+            "runs on bids with outcome=LOST. Mark a SENT bid as LOST from "
+            "the Active Bids page to enable it."
+        )
+    else:
+        bid_options = {
+            f"{b['client_name'][:30]} — {b['service_line']} "
+            f"(${float(b['estimated_value'] or 0):,.0f}, lost to "
+            f"{b.get('outcome_competitor') or '?'})": b["id"]
+            for b in lost_bids
+        }
+        picked_label = st.selectbox("Select a LOST bid", list(bid_options.keys()))
+        picked_id = bid_options[picked_label]
+        picked_bid = next(b for b in lost_bids if b["id"] == picked_id)
+
+        # Surface the gap upfront — no agent call needed for the
+        # quick read.
+        winning_bid = picked_bid.get("outcome_winning_bid")
+        if winning_bid is not None and picked_bid.get("estimated_value"):
+            our_p = float(picked_bid["estimated_value"])
+            their_p = float(winning_bid)
+            delta = our_p - their_p
+            delta_pct = (delta / our_p * 100) if our_p else 0
+            gc1, gc2, gc3 = st.columns(3)
+            gc1.metric("Our price", f"${our_p:,.0f}")
+            gc2.metric("Winning price", f"${their_p:,.0f}")
+            gc3.metric(
+                "Gap",
+                f"${delta:,.0f}",
+                delta=f"{delta_pct:+.1f}%",
+                delta_color="inverse",
+            )
+
+        if st.button("Run postmortem agent", type="primary"):
+            from agents import postmortem
+
+            with st.spinner("Postmortem agent analyzing..."):
+                try:
+                    result = postmortem.analyze_loss(picked_id, write_insight=True)
+                except Exception as e:
+                    st.error(f"Postmortem failed: {e}")
+                    st.stop()
+
+            st.success("Analysis complete — also written to Intelligence Insights.")
+
+            st.subheader("Likely reasons")
+            for r in result.get("likely_reasons", []):
+                st.markdown(f"- {r}")
+
+            st.subheader("Price gap interpretation")
+            pga = result.get("price_gap_analysis", {})
+            st.markdown(
+                f"- Our price: ${pga.get('our_price', 0):,.0f}\n"
+                f"- Winning price: "
+                + (
+                    f"${pga['winning_price']:,.0f}"
+                    if pga.get("winning_price") is not None
+                    else "_unknown_"
+                )
+                + (
+                    f"\n- Delta: ${pga['delta_usd']:,.0f} ({pga['delta_pct']:+.1f}%)"
+                    if pga.get("delta_usd") is not None
+                    else ""
+                )
+            )
+            if pga.get("interpretation"):
+                st.markdown(f"**Interpretation:** {pga['interpretation']}")
+
+            st.subheader("Other signals")
+            cc1, cc2 = st.columns(2)
+            cc1.markdown(
+                f"**Exclusions signal:** {result.get('exclusions_signal', '—')}"
+            )
+            cc2.markdown(
+                f"**Capacity factor:** {result.get('capacity_factor', '—')}"
+            )
+            st.markdown(
+                f"**Pattern across recent losses:** "
+                f"{result.get('pattern_across_recent_losses', '—')}"
+            )
+
+            st.subheader("Recommendations for next bid")
+            for r in result.get("recommendations_for_next_bid", []):
+                st.markdown(f"- {r}")
+
+            st.caption(
+                f"Confidence: **{result.get('confidence', '?')}** "
+                "(low: n<3 comparable losses; medium: 3-7; high: 8+)"
+            )
+
+            with st.expander("Full JSON"):
+                st.json(result)
 
 
 # ─── Page: Follow-ups ──────────────────────────────────────────

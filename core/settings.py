@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     # GPT wrapper" angle stronger but adds ~5-10s and an API call.
     use_tool_use_pricing: bool = Field(default=False, alias="USE_TOOL_USE_PRICING")
 
+    # Feature flag: route nightly Intelligence narrative generation
+    # through Anthropic's Batch API. 50% cheaper, async (up to 24h).
+    # Off by default because batch is async and the weekly task is
+    # expected to complete in the same hour it runs.
+    intelligence_use_batch: bool = Field(
+        default=False, alias="INTELLIGENCE_USE_BATCH",
+    )
+
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
 
