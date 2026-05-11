@@ -89,11 +89,35 @@ Keep the service_role key safe; it bypasses Postgres RLS.
 > Pages Functions discovery automatic.
 
 The build will succeed but the deployed app won't function yet — it
-needs runtime env vars (next step).
+needs runtime env vars + the `nodejs_compat` flag (next steps).
+
+> **If you see "It looks like you've run a Workers-specific command in
+> a Pages project":** delete `web/wrangler.toml` if it exists (the
+> Cloudflare build harness sometimes misclassifies a Pages project as
+> Workers when wrangler.toml is in the build root). This repo no
+> longer ships a wrangler.toml for exactly this reason — everything
+> wrangler.toml would configure is set in the Pages dashboard instead.
 
 ---
 
-## Step 3 — Configure runtime secrets
+## Step 3 — Functions compatibility flags (1 min)
+
+The Anthropic SDK and the Supabase JS client both depend on Node.js
+builtins (`stream`, `events`, `buffer`). Cloudflare Workers needs
+`nodejs_compat` to polyfill them.
+
+1. Pages dashboard → your project → **Settings → Functions**.
+2. Under **Compatibility flags**, click **Edit** for **Production**.
+3. Add `nodejs_compat`. Save.
+4. Repeat for **Preview**.
+5. Under **Compatibility date**, set `2026-01-01` (or today's date).
+   Apply to both Production and Preview.
+
+These changes take effect on the **next** deployment, not retroactively.
+
+---
+
+## Step 4 — Configure runtime secrets
 
 1. Pages dashboard → your project → **Settings → Environment variables**.
 2. Click **Production** tab → **Add variable** for each of:
@@ -114,7 +138,7 @@ needs runtime env vars (next step).
 
 ---
 
-## Step 4 — Verify (2 min)
+## Step 5 — Verify (2 min)
 
 Open `https://<project-name>.pages.dev`. You should see:
 
@@ -135,7 +159,7 @@ configured", same thing.
 
 ---
 
-## Step 5 — Custom domain (optional)
+## Step 6 — Custom domain (optional)
 
 Pages dashboard → your project → **Custom domains** → add
 `bid-intel.your-domain.com` (or similar). Cloudflare provisions an SSL
