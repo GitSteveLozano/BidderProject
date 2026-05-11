@@ -5,19 +5,118 @@ interface Props {
 }
 
 const { page, error } = Astro.props;
-const message =
-  error instanceof Error
-    ? `${error.name}: ${error.message}`
-    : typeof error === 'string'
-      ? error
-      : (() => {
-          try {
-            return JSON.stringify(error, null, 2);
-          } catch {
-            return String(error);
-          }
-        })();
+
+// Surface the raw shape in Cloudflare logs so we can identify the
+// underlying throw even when the rendered message is a fallback.
+try {
+  console.error(`[SSRError ${page}]`, error);
+} catch {
+  // never let logging itself break the page
+}
+
+interface Formatted {
+  kind: string;
+  message: string;
+  details: Record<string, unknown>;
+  dump: string;
+}
+
+const fmt = formatError(error);
 const stack = error instanceof Error ? error.stack : null;
+const detailEntries = Object.entries(fmt.details);
+
+function formatError(err: unknown): Formatted {
+  // strings + primitives
+  if (typeof err === 'string') {
+    return { kind: 'string', message: err, details: {}, dump: err };
+  }
+  if (err == null) {
+    return { kind: 'null', message: '(no error value thrown)', details: {}, dump: String(err) };
+  }
+  if (typeof err !== 'object') {
+    const s = String(err);
+    return { kind: typeof err, message: s, details: {}, dump: s };
+  }
+
+  const obj = err as Record<string, unknown>;
+  const kind =
+    (err as { constructor?: { name?: string } }).constructor?.name ??
+    Object.prototype.toString.call(err).slice(8, -1);
+
+  // Prefer a real string message. Cover Error, PostgrestError,
+  // wrapped { error: { message } } shapes, and anything else with
+  // a string message-like field.
+  let message =
+    pickString(obj, 'message') ??
+    pickString(asObj(obj.error), 'message') ??
+    pickString(obj, 'description') ??
+    pickString(obj, 'msg') ??
+    pickString(obj, 'statusText') ??
+    null;
+
+  // Common diagnostic fields from Supabase / Anthropic / fetch.
+  const details: Record<string, unknown> = {};
+  for (const key of ['name', 'code', 'status', 'statusCode', 'details', 'hint', 'cause', 'type']) {
+    if (key in obj && obj[key] != null && obj[key] !== '') details[key] = obj[key];
+  }
+
+  if (message == null || message === '[object Object]') {
+    // Last-resort dump: include non-enumerable Error props by name.
+    const safe = safeStringify(err);
+    message = safe === '{}' || safe === '[object Object]'
+      ? `${kind} (no message; see structured dump below)`
+      : safe;
+  }
+
+  return { kind, message, details, dump: safeStringify(err) };
+}
+
+function pickString(o: Record<string, unknown> | undefined, key: string): string | null {
+  if (!o) return null;
+  const v = o[key];
+  return typeof v === 'string' && v.trim() !== '' ? v : null;
+}
+
+function asObj(v: unknown): Record<string, unknown> | undefined {
+  return v && typeof v === 'object' ? (v as Record<string, unknown>) : undefined;
+}
+
+function safeStringify(value: unknown): string {
+  const seen = new WeakSet<object>();
+  try {
+    return JSON.stringify(
+      value,
+      (_key, val) => {
+        if (typeof val === 'bigint') return `${val.toString()}n`;
+        if (typeof val === 'function') return `[Function ${val.name || 'anonymous'}]`;
+        if (val instanceof Error) {
+          // Error props are non-enumerable; spread them by name.
+          return {
+            name: val.name,
+            message: val.message,
+            ...(val.cause !== undefined ? { cause: val.cause } : {}),
+            ...Object.fromEntries(Object.entries(val)),
+          };
+        }
+        if (val && typeof val === 'object') {
+          if (seen.has(val as object)) return '[Circular]';
+          seen.add(val as object);
+        }
+        return val;
+      },
+      2,
+    ) ?? String(value);
+  } catch {
+    // Truly last resort — list own property names so we at least know
+    // something about the object instead of falling back to [object Object].
+    try {
+      const names = Object.getOwnPropertyNames(value as object);
+      return names.length > 0 ? `{${names.join(', ')}}` : Object.prototype.toString.call(value);
+    } catch {
+      return Object.prototype.toString.call(value);
+    }
+  }
+}
 ---
 
 <div class="rounded-md border border-red-300 bg-red-50 p-6 my-6">
@@ -34,10 +133,27 @@ const stack = error instanceof Error ? error.stack : null;
     flag without secrets.
   </p>
   <div class="mt-4 rounded bg-red-100 p-3 text-xs font-mono text-red-900 overflow-x-auto">
-    <strong>{message}</strong>
+    <div class="text-red-700 mb-1">{fmt.kind}</div>
+    <strong class="whitespace-pre-wrap">{fmt.message}</strong>
   </div>
+  {detailEntries.length > 0 && (
+    <dl class="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs font-mono text-red-900">
+      {detailEntries.map(([k, v]) => (
+        <>
+          <dt class="text-red-700">{k}</dt>
+          <dd class="whitespace-pre-wrap break-all">
+            {typeof v === 'string' ? v : safeStringify(v)}
+          </dd>
+        </>
+      ))}
+    </dl>
+  )}
+  <details class="mt-3">
+    <summary class="cursor-pointer text-xs text-red-700">Structured dump</summary>
+    <pre class="mt-2 text-xs text-red-900 overflow-x-auto whitespace-pre-wrap">{fmt.dump}</pre>
+  </details>
   {stack && (
-    <details class="mt-3">
+    <details class="mt-2">
       <summary class="cursor-pointer text-xs text-red-700">Stack</summary>
       <pre class="mt-2 text-xs text-red-900 overflow-x-auto whitespace-pre-wrap">{stack}</pre>
     </details>
