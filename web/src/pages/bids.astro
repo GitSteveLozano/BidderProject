@@ -5,18 +5,12 @@ import { client as supabaseClient, getCompanies } from '@/lib/supabase';
 
 export const prerender = false;
 
-// Diagnostic: confirm this handler actually runs on Cloudflare Pages
-// production. Production has been returning literal "[object Object]"
-// for SSR pages while local wrangler dev renders correctly, so we
-// need to know whether the handler is even being invoked.
-const SSR_BUILD_TAG = 'ssr-debug-v3';
-console.log(`[bids.astro] handler invoked tag=${SSR_BUILD_TAG} t=${new Date().toISOString()}`);
-
-// Disable edge cache for personalized SSR responses (no middleware
-// since the previous middleware approach broke other routes).
+// Personalized SSR responses must not be edge-cached. Set per-page
+// because the previous middleware-based approach broke /bids et al
+// (commit 9efe16d reverted it). The cdn-cache-control header targets
+// Cloudflare specifically; cache-control covers browsers.
 Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
 Astro.response.headers.set('cdn-cache-control', 'no-store');
-Astro.response.headers.set('x-ssr-build-tag', SSR_BUILD_TAG);
 
 // Diagnostic short-circuit: hitting /bids?diag=1 returns a JSON dump
 // of the runtime detection booleans Astro uses to pick rendering
