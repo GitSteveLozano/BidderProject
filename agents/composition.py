@@ -81,6 +81,58 @@ def _get_service_line(company_id: UUID | str, service_line: str) -> dict:
     return row or {}
 
 
+def _build_prompts(
+    company_id: UUID | str,
+    service_line: str,
+    scope_summary: str,
+    client_name: str,
+    client_address: str,
+    pricing_breakdown: dict,
+) -> tuple[str, str, list[str]]:
+    """Return (system_prompt, user_msg, [company_context]).
+
+    Shared between compose_bid() and compose_bid_stream() so both render
+    bytewise-identical prompts (and hit the same cache key).
+    """
+    import json
+
+    voice = _get_voice(company_id)
+    sl = _get_service_line(company_id, service_line)
+    exclusions_required = sl.get("standard_exclusions") or []
+
+    voice_summary = {
+        "tone": voice.get("tone"),
+        "preferred_terms": voice.get("preferred_terms"),
+        "boilerplate_intro": voice.get("boilerplate_intro"),
+        "boilerplate_scope_intro": voice.get("boilerplate_scope_intro"),
+        "boilerplate_terms": voice.get("boilerplate_terms"),
+        "boilerplate_warranty": voice.get("boilerplate_warranty"),
+        "boilerplate_closing": voice.get("boilerplate_closing"),
+    }
+
+    # Per-company stable context. Sort_keys so the bytes don't vary
+    # across requests — silent invalidator guard for the cache.
+    company_context = COMPANY_CONTEXT_TEMPLATE.format(
+        voice=json.dumps(voice_summary, default=str, indent=2, sort_keys=True),
+        service_line=service_line,
+        scope_template=sl.get("typical_scope_text") or "",
+        exclusions_list="\n".join(f"  - {e}" for e in exclusions_required) or "  (none)",
+    )
+
+    user_msg = USER_TEMPLATE.format(
+        scope_summary=scope_summary,
+        client_name=client_name,
+        client_address=client_address,
+        target_price=pricing_breakdown["target_price"],
+        labor_hours=pricing_breakdown["labor"]["total_hours"],
+        labor_subtotal=pricing_breakdown["labor"]["subtotal"],
+        materials_subtotal=pricing_breakdown["materials"].get("subtotal") or 0,
+        overhead_subtotal=pricing_breakdown["overhead"]["subtotal"],
+        target_margin_pct=pricing_breakdown["profit"]["target_margin_pct"],
+    )
+    return SYSTEM_PROMPT, user_msg, [company_context]
+
+
 def compose_bid(
     company_id: UUID | str,
     service_line: str,
@@ -103,50 +155,15 @@ def compose_bid(
     from core.settings import get_settings
     from tools.exclusions_verify import verify_exclusions
 
-    voice = _get_voice(company_id)
-    sl = _get_service_line(company_id, service_line)
-    exclusions_required = sl.get("standard_exclusions") or []
-
-    voice_summary = {
-        "tone": voice.get("tone"),
-        "preferred_terms": voice.get("preferred_terms"),
-        "boilerplate_intro": voice.get("boilerplate_intro"),
-        "boilerplate_scope_intro": voice.get("boilerplate_scope_intro"),
-        "boilerplate_terms": voice.get("boilerplate_terms"),
-        "boilerplate_warranty": voice.get("boilerplate_warranty"),
-        "boilerplate_closing": voice.get("boilerplate_closing"),
-    }
-
-    import json
-
-    # Build the per-company stable context block. This goes into
-    # system_extra so it caches across every bid for this company.
-    # IMPORTANT: deterministic serialization (sort_keys) so the bytes
-    # don't vary across requests due to dict-iteration order.
-    company_context = COMPANY_CONTEXT_TEMPLATE.format(
-        voice=json.dumps(voice_summary, default=str, indent=2, sort_keys=True),
-        service_line=service_line,
-        scope_template=sl.get("typical_scope_text") or "",
-        exclusions_list="\n".join(f"  - {e}" for e in exclusions_required) or "  (none)",
-    )
-
-    # Per-bid volatile content stays in the user message.
-    user_msg = USER_TEMPLATE.format(
-        scope_summary=scope_summary,
-        client_name=client_name,
-        client_address=client_address,
-        target_price=pricing_breakdown["target_price"],
-        labor_hours=pricing_breakdown["labor"]["total_hours"],
-        labor_subtotal=pricing_breakdown["labor"]["subtotal"],
-        materials_subtotal=pricing_breakdown["materials"].get("subtotal") or 0,
-        overhead_subtotal=pricing_breakdown["overhead"]["subtotal"],
-        target_margin_pct=pricing_breakdown["profit"]["target_margin_pct"],
+    system, user_msg, system_extra = _build_prompts(
+        company_id, service_line, scope_summary, client_name,
+        client_address, pricing_breakdown,
     )
 
     draft = complete(
         model=get_settings().model_sonnet,
-        system=SYSTEM_PROMPT,
-        system_extra=[company_context],
+        system=system,
+        system_extra=system_extra,
         cache_system=True,  # caches SYSTEM_PROMPT + company_context together
         user=user_msg,
         max_tokens=3000,
@@ -156,6 +173,80 @@ def compose_bid(
     verification = verify_exclusions(draft, service_line, company_id)
 
     return {
+        "draft_markdown": draft,
+        "exclusions_verified": verification["all_present"],
+        "exclusions_present": verification["present"],
+        "exclusions_missing": verification["missing"],
+        "total_required": verification["total_required"],
+    }
+
+
+def compose_bid_stream(
+    company_id: UUID | str,
+    service_line: str,
+    scope_summary: str,
+    client_name: str,
+    client_address: str,
+    pricing_breakdown: dict,
+):
+    """Streaming variant of compose_bid.
+
+    Yields text deltas as Claude produces them. The caller is expected
+    to concatenate the deltas to assemble the full draft. After the
+    stream ends, callers should run `verify_exclusions(draft, ...)` on
+    the assembled text to populate the exclusions verification result —
+    see compose_bid_stream_with_verification below for the convenience
+    wrapper that does this.
+    """
+    from core.anthropic_client import complete_stream
+    from core.settings import get_settings
+
+    system, user_msg, system_extra = _build_prompts(
+        company_id, service_line, scope_summary, client_name,
+        client_address, pricing_breakdown,
+    )
+    yield from complete_stream(
+        model=get_settings().model_sonnet,
+        system=system,
+        system_extra=system_extra,
+        cache_system=True,
+        user=user_msg,
+        max_tokens=3000,
+        temperature=0.4,
+    )
+
+
+def compose_bid_stream_with_verification(
+    company_id: UUID | str,
+    service_line: str,
+    scope_summary: str,
+    client_name: str,
+    client_address: str,
+    pricing_breakdown: dict,
+):
+    """Yields tokens AND a final dict identical in shape to compose_bid().
+
+    The final value is delivered via the generator's `value` attribute on
+    the StopIteration — callers using Streamlit's `st.write_stream` get
+    the token stream rendered live, and a separate call site (after the
+    stream is exhausted) runs the exclusions verification.
+    """
+    from tools.exclusions_verify import verify_exclusions
+
+    chunks: list[str] = []
+    for delta in compose_bid_stream(
+        company_id, service_line, scope_summary, client_name,
+        client_address, pricing_breakdown,
+    ):
+        chunks.append(delta)
+        yield delta
+
+    draft = "".join(chunks)
+    verification = verify_exclusions(draft, service_line, company_id)
+    # The result dict isn't returned from a Python generator in a way
+    # that's ergonomic for Streamlit's st.write_stream consumer, so we
+    # publish it as an attribute via a closure helper:
+    compose_bid_stream_with_verification.last_result = {
         "draft_markdown": draft,
         "exclusions_verified": verification["all_present"],
         "exclusions_present": verification["present"],

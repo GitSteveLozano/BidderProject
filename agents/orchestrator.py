@@ -208,6 +208,136 @@ def run_assessment(bid_id: UUID | str, labor_plan: list[dict], material_quantity
     }
 
 
+def run_assessment_streaming(
+    bid_id: UUID | str, labor_plan: list[dict], material_quantity: float,
+):
+    """Streaming variant of run_assessment.
+
+    Generator semantics:
+      - yields ('pricing', pricing_breakdown_dict) once Pricing finishes
+      - yields ('token', text_delta) for each Composition token
+      - yields ('done', {...result dict matching run_assessment...}) at the end
+
+    The DB writes happen on the 'done' yield (same shape as
+    run_assessment). The state machine transitions to DRAFT_GENERATED
+    or EXCLUSIONS_REVIEW at that point.
+    """
+    from datetime import date as _date
+
+    from agents import composition, pricing
+    from core.audit import record as audit_record
+    from core.db import execute, fetch_one
+    from core.settings import get_settings
+    from tools.exclusions_verify import verify_exclusions
+
+    bid_id = str(bid_id)
+    bid = fetch_one(
+        """
+        SELECT b.*, c.id AS company_id
+        FROM bids b JOIN companies c ON c.id = b.company_id
+        WHERE b.id = %s
+        """,
+        (bid_id,),
+    )
+    if not bid:
+        raise ValueError(f"bid {bid_id} not found")
+    if bid["state"] == BidState.RFP_RECEIVED.value:
+        transition(bid_id, BidState.ASSESSING, "auto", "begin assessment (streaming)")
+
+    # Step 1: Pricing (synchronous — no streaming benefit for the
+    # deterministic math + short narrative)
+    if get_settings().use_tool_use_pricing:
+        from agents import pricing_tool_use
+        pricing_result = pricing_tool_use.compute_pricing_tool_use(
+            company_id=bid["company_id"],
+            service_line=bid["service_line"],
+            labor_plan=labor_plan,
+            material_quantity=material_quantity,
+            estimated_start_date=bid["estimated_start_date"] or _date.today(),
+        )
+    else:
+        pricing_result = pricing.compute_pricing(
+            company_id=bid["company_id"],
+            service_line=bid["service_line"],
+            labor_plan=labor_plan,
+            material_quantity=material_quantity,
+            estimated_start_date=bid["estimated_start_date"] or _date.today(),
+            client_segment=bid["client_segment"] or "repeat",
+        )
+    yield ("pricing", pricing_result)
+
+    # Step 2: Composition (streaming)
+    chunks: list[str] = []
+    for delta in composition.compose_bid_stream(
+        company_id=bid["company_id"],
+        service_line=bid["service_line"],
+        scope_summary=bid["scope_summary"] or "",
+        client_name=bid["client_name"] or "",
+        client_address=(bid.get("job_address") or {}).get("formatted", ""),
+        pricing_breakdown=pricing_result,
+    ):
+        chunks.append(delta)
+        yield ("token", delta)
+
+    draft = "".join(chunks)
+    verification = verify_exclusions(draft, bid["service_line"], bid["company_id"])
+
+    # Step 3: persist + transition (same shape as run_assessment)
+    execute(
+        """
+        UPDATE bids
+           SET pricing_breakdown = %s,
+               estimated_value = %s,
+               estimated_labor_hours = %s,
+               capacity_at_quote = %s,
+               exclusions_applied = %s,
+               exclusions_missing = %s,
+               draft_generated_at = NOW()
+         WHERE id = %s
+        """,
+        (
+            _json(pricing_result),
+            pricing_result["target_price"],
+            pricing_result["labor"]["total_hours"],
+            pricing_result["capacity_utilization_at_start"],
+            verification["present"],
+            verification["missing"],
+            bid_id,
+        ),
+    )
+    if verification["all_present"]:
+        transition(bid_id, BidState.DRAFT_GENERATED, "auto",
+                   f"{verification['total_required']} exclusions verified present")
+        next_state = BidState.DRAFT_GENERATED
+    else:
+        transition(bid_id, BidState.EXCLUSIONS_REVIEW, "auto",
+                   f"missing: {verification['missing']}")
+        next_state = BidState.EXCLUSIONS_REVIEW
+
+    audit_record(
+        entity_type="bid",
+        entity_id=bid_id,
+        company_id=str(bid["company_id"]),
+        action="assess_streaming",
+        actor="composition_agent",
+        diff={"target_price": pricing_result["target_price"],
+              "next_state": next_state.value},
+    )
+
+    yield ("done", {
+        "bid_id": bid_id,
+        "state": next_state.value,
+        "pricing": pricing_result,
+        "composition": {
+            "draft_markdown": draft,
+            "exclusions_verified": verification["all_present"],
+            "exclusions_present": verification["present"],
+            "exclusions_missing": verification["missing"],
+            "total_required": verification["total_required"],
+        },
+    })
+
+
 def accept_exclusions(bid_id: UUID | str, accepted: list[str], skipped: list[str]) -> dict:
     """Human reviewed missing exclusions; route back to DRAFT_GENERATED."""
     from core.db import execute

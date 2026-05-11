@@ -146,6 +146,30 @@ def cmd_ingest(args) -> int:
     return 0
 
 
+def cmd_audit_export(args) -> int:
+    """Dump audit_log rows as CSV to stdout."""
+    from datetime import datetime
+
+    from core.audit_export import export_csv
+
+    since = datetime.fromisoformat(args.since) if args.since else None
+    until = datetime.fromisoformat(args.until) if args.until else None
+    csv_body = export_csv(
+        company_id=args.company_id,
+        since=since,
+        until=until,
+        entity_type=args.entity_type,
+    )
+    if args.output:
+        from pathlib import Path
+
+        Path(args.output).write_text(csv_body, encoding="utf-8")
+        print(f"Wrote {args.output} ({len(csv_body.splitlines()) - 1} rows)")
+    else:
+        print(csv_body, end="")
+    return 0
+
+
 def cmd_demo(args) -> int:
     """Run the full demo flow end-to-end. Useful for sanity checks before a live demo."""
     from agents import orchestrator
@@ -220,6 +244,15 @@ def main(argv: list[str] | None = None) -> int:
     p_ingest.add_argument("--dir", default="data/raw", help="root directory to walk")
     p_ingest.add_argument("--dry-run", action="store_true")
     p_ingest.set_defaults(func=cmd_ingest)
+
+    p_audit = sub.add_parser("audit-export", help="dump audit_log rows as CSV")
+    p_audit.add_argument("--company-id", help="filter to one company")
+    p_audit.add_argument("--since", help="ISO datetime — only rows >= this")
+    p_audit.add_argument("--until", help="ISO datetime — only rows <= this")
+    p_audit.add_argument("--entity-type",
+                          help="bid | reconciliation | follow_up | ...")
+    p_audit.add_argument("--output", help="write to file instead of stdout")
+    p_audit.set_defaults(func=cmd_audit_export)
 
     p_demo = sub.add_parser("demo", help="run the full demo flow end-to-end")
     p_demo.add_argument("--company-id", help="defaults to DEMO_COMPANY_ID")

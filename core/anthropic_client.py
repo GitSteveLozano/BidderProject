@@ -95,6 +95,35 @@ def complete(
     return "".join(parts).strip()
 
 
+def complete_stream(
+    model: str,
+    system: str,
+    user: str,
+    max_tokens: int = 2048,
+    temperature: float = 0.4,
+    cache_system: bool = False,
+    system_extra: list[str] | None = None,
+):
+    """Streaming text completion.
+
+    Yields text deltas as they arrive. Caller composes the final string
+    by concatenation, or by calling .get_final_message() on the stream
+    helper. We use the recommended `client.messages.stream()` context
+    manager, which accumulates state and exposes `text_stream`.
+    """
+    system_payload = _build_system(system, cache_system, system_extra)
+    client = get_client()
+    with client.messages.stream(
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        system=system_payload,
+        messages=[{"role": "user", "content": user}],
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
+
+
 def parse_structured(
     model: str,
     system: str,

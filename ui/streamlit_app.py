@@ -63,6 +63,34 @@ st.sidebar.caption(
     f"Sonnet: `{get_settings().model_sonnet}`"
 )
 
+# Audit log export — sidebar download button (filtered to current company)
+with st.sidebar.expander("Audit log export"):
+    from core.audit_export import export_csv
+
+    audit_entity_type = st.selectbox(
+        "Filter",
+        [None, "bid", "reconciliation", "follow_up", "insight"],
+        format_func=lambda v: "(any)" if v is None else v,
+        key="audit_entity_filter",
+    )
+    if st.button("Generate CSV", key="audit_export_btn"):
+        try:
+            csv_body = export_csv(
+                company_id=company_id,
+                entity_type=audit_entity_type,
+            )
+            from datetime import datetime as _dt
+            st.download_button(
+                "⬇ Download",
+                data=csv_body,
+                file_name=f"audit-{_dt.utcnow():%Y%m%d-%H%M%S}.csv",
+                mime="text/csv",
+                key="audit_dl_btn",
+            )
+            st.caption(f"{len(csv_body.splitlines()) - 1} rows")
+        except Exception as e:
+            st.error(f"export failed: {e}")
+
 
 # ─── Page: Onboarding ─────────────────────────────────────────
 if page == "Onboarding":
@@ -143,6 +171,10 @@ elif page == "Bid Generation":
             primary_hours = st.number_input("Primary trade hours", 40, 2000, 312, step=8)
             helper_hours = st.number_input("Helper / laborer hours", 0, 1000, 80, step=8)
             material_qty = st.number_input("Material quantity (sqft / lf)", 0.0, 50000.0, 3200.0)
+            stream_bid = st.checkbox(
+                "Stream the bid draft (Composition agent renders progressively)",
+                value=True,
+            )
         cost_estimate_col, submit_col = st.columns([1, 2])
         with cost_estimate_col:
             estimate_cost = st.form_submit_button("Estimate input cost")
@@ -180,19 +212,61 @@ elif page == "Bid Generation":
             estimated_start_date=start_date,
         )
         st.session_state["last_bid_id"] = bid_id
-        with st.status("Running assessment...", expanded=True) as status:
-            st.write("→ Pricing agent: querying loaded labor costs + capacity")
-            result = orchestrator.run_assessment(
-                bid_id=bid_id,
-                labor_plan=[
-                    {"trade": primary_trade, "hours": primary_hours},
-                    {"trade": "helper", "hours": helper_hours},
-                ],
-                material_quantity=material_qty,
-            )
-            st.write("→ Composition agent: drafting bid in company voice")
-            st.write("→ Composition agent: verifying standard exclusions")
-            status.update(label=f"Done. State = **{result['state']}**", state="complete")
+
+        labor_plan = [
+            {"trade": primary_trade, "hours": primary_hours},
+            {"trade": "helper", "hours": helper_hours},
+        ]
+
+        if stream_bid:
+            # Streaming path: render the bid draft progressively.
+            with st.status("Pricing agent: querying loaded labor + capacity...",
+                            expanded=True) as status:
+                gen = orchestrator.run_assessment_streaming(
+                    bid_id=bid_id,
+                    labor_plan=labor_plan,
+                    material_quantity=material_qty,
+                )
+                result = None
+                stream_placeholder = None
+                token_buffer: list[str] = []
+
+                for kind, payload in gen:
+                    if kind == "pricing":
+                        status.update(
+                            label="Composition agent: drafting in voice (streaming)...",
+                            state="running",
+                        )
+                        st.subheader("Generated bid draft (streaming)")
+                        stream_placeholder = st.empty()
+                        # Stash for later sections
+                        st.session_state["_stream_pricing"] = payload
+                    elif kind == "token" and stream_placeholder is not None:
+                        token_buffer.append(payload)
+                        stream_placeholder.markdown("".join(token_buffer))
+                    elif kind == "done":
+                        result = payload
+                        status.update(
+                            label=f"Done. State = **{result['state']}**",
+                            state="complete",
+                        )
+                # Defensive guard — shouldn't happen, but if the stream
+                # short-circuits (e.g., API error), bail with a clear msg.
+                if result is None:
+                    st.error("Streaming assessment did not complete.")
+                    st.stop()
+        else:
+            with st.status("Running assessment...", expanded=True) as status:
+                st.write("→ Pricing agent: querying loaded labor costs + capacity")
+                result = orchestrator.run_assessment(
+                    bid_id=bid_id,
+                    labor_plan=labor_plan,
+                    material_quantity=material_qty,
+                )
+                st.write("→ Composition agent: drafting bid in company voice")
+                st.write("→ Composition agent: verifying standard exclusions")
+                status.update(label=f"Done. State = **{result['state']}**",
+                              state="complete")
 
         st.subheader("Pricing breakdown")
         pb = result["pricing"]
@@ -247,7 +321,10 @@ elif page == "Bid Generation":
             st.json(pb)
 
         comp = result["composition"]
-        st.subheader("Generated bid draft")
+        # If we already streamed the draft, don't re-render it as a
+        # static markdown block — just show the exclusions verdict.
+        if not stream_bid:
+            st.subheader("Generated bid draft")
         if not comp["exclusions_verified"]:
             st.warning(
                 f"⚠️  Composition flagged {len(comp['exclusions_missing'])} "
@@ -275,7 +352,9 @@ elif page == "Bid Generation":
                 st.rerun()
         else:
             st.success(f"✅  {comp['total_required']} standard exclusions verified present.")
-        st.markdown(comp["draft_markdown"])
+        # Only render the static markdown if we didn't already stream it
+        if not stream_bid:
+            st.markdown(comp["draft_markdown"])
 
         # Send button
         if comp["exclusions_verified"]:
@@ -732,6 +811,93 @@ elif page == "Intelligence Dashboard":
                         )
                 if not drifted:
                     st.caption("No service line shows >=3pp drift in the latest quarter.")
+
+            # Drill-down: pick a service line, see the underlying bids
+            st.subheader("Drill into a service line")
+            sl_options = list(pivot.index)
+            picked_sl = st.selectbox(
+                "Service line",
+                sl_options,
+                key="margin_drilldown_sl",
+            )
+            if picked_sl:
+                detail_rows = fetch_all(
+                    """
+                    SELECT b.id, b.client_name, b.estimated_value,
+                           j.quoted_labor_hours, j.actual_labor_hours,
+                           j.variance_labor_hours_pct,
+                           j.delivered_margin_pct, j.quoted_margin_pct,
+                           j.reconciled_at,
+                           j.actual_labor_cost + j.actual_material_cost
+                               + j.actual_other_costs AS actual_total
+                    FROM job_cost_reconciliation j
+                    JOIN bids b ON b.id = j.bid_id
+                    WHERE j.company_id = %s AND b.service_line = %s
+                    ORDER BY j.reconciled_at DESC
+                    LIMIT 50
+                    """,
+                    (company_id, picked_sl),
+                )
+                if detail_rows:
+                    detail_df = pd.DataFrame(detail_rows)
+                    detail_df["delivered_margin_pct"] = (
+                        detail_df["delivered_margin_pct"].astype(float)
+                    )
+                    detail_df["variance_labor_hours_pct"] = (
+                        detail_df["variance_labor_hours_pct"].astype(float)
+                    )
+                    detail_df["estimated_value"] = detail_df["estimated_value"].astype(float)
+                    detail_df["actual_total"] = detail_df["actual_total"].astype(float)
+
+                    # KPIs across the drilled-into service line
+                    dk1, dk2, dk3, dk4 = st.columns(4)
+                    dk1.metric("Reconciled jobs", len(detail_df))
+                    dk2.metric(
+                        "Median delivered margin",
+                        f"{detail_df['delivered_margin_pct'].median():.1f}%",
+                    )
+                    dk3.metric(
+                        "Median labor variance",
+                        f"{detail_df['variance_labor_hours_pct'].median():.1f}%",
+                    )
+                    dk4.metric(
+                        "Total revenue",
+                        f"${detail_df['estimated_value'].sum():,.0f}",
+                    )
+
+                    # Margin trend line over reconciled_at
+                    detail_df_sorted = detail_df.sort_values("reconciled_at")
+                    fig_trend = px.scatter(
+                        detail_df_sorted,
+                        x="reconciled_at",
+                        y="delivered_margin_pct",
+                        size="estimated_value",
+                        hover_data=["client_name", "variance_labor_hours_pct"],
+                        trendline="lowess" if len(detail_df_sorted) >= 5 else None,
+                        title=f"{picked_sl} — delivered margin per reconciled job over time",
+                        labels={"delivered_margin_pct": "Delivered margin %",
+                                "reconciled_at": "Reconciled"},
+                    )
+                    fig_trend.add_hline(
+                        y=float(detail_df["delivered_margin_pct"].mean()),
+                        line_dash="dash", line_color="gray",
+                        annotation_text="mean",
+                    )
+                    st.plotly_chart(fig_trend, use_container_width=True)
+
+                    # Bid-by-bid table
+                    with st.expander(f"All {len(detail_df)} reconciled bids"):
+                        st.dataframe(
+                            detail_df[[
+                                "client_name", "estimated_value", "actual_total",
+                                "quoted_labor_hours", "actual_labor_hours",
+                                "variance_labor_hours_pct", "delivered_margin_pct",
+                                "reconciled_at",
+                            ]],
+                            use_container_width=True,
+                        )
+                else:
+                    st.caption(f"No reconciled jobs yet for {picked_sl}.")
     else:
         st.caption("Not enough reconciled jobs per quarter to render the heatmap.")
 
