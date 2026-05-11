@@ -112,7 +112,16 @@ export const GET: APIRoute = async ({ locals }) => {
     ),
     {
       status: ok ? 200 : 503,
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        // Diagnostic endpoint — never serve from edge cache or
+        // browser cache. Cloudflare aggressively caches successful
+        // JSON responses by default, which masked our debugging
+        // when companies_count flipped from 0 to 15 in the DB but
+        // /api/health kept returning the stale 0 result.
+        'cache-control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'cdn-cache-control': 'no-store',
+      },
     },
   );
 };
