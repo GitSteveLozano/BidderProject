@@ -37,7 +37,10 @@ export const onRequestPost: PagesFunction<CloudflareEnv> = async (ctx) => {
     scope_summary,
     labor_plan,
     material_quantity,
-    client_segment = 'repeat',
+    // client_segment is captured for parity with the FastAPI route
+    // (Follow-up cadence reads it on SENT) but the streaming flow
+    // here stops at DRAFT_GENERATED / EXCLUSIONS_REVIEW.
+    client_segment: _client_segment = 'repeat',
   } = body;
 
   if (!company_id || !service_line || !labor_plan || material_quantity == null) {
@@ -136,7 +139,12 @@ Write the bid document.`;
     async start(controller) {
       try {
         const model = env.DEFAULT_MODEL_SONNET ?? 'claude-sonnet-4-6';
-        const response = await client.messages.stream({
+        const chunks: string[] = [];
+
+        // client.messages.stream() returns a MessageStream that emits
+        // 'text' events for each delta. Use .on() + finalMessage()
+        // per the Anthropic SDK's recommended streaming pattern.
+        const msgStream = client.messages.stream({
           model,
           max_tokens: 3000,
           temperature: 0.4,
@@ -151,13 +159,14 @@ Write the bid document.`;
           messages: [{ role: 'user', content: userMsg }],
         });
 
-        const chunks: string[] = [];
-        for await (const text of response.textStream) {
+        msgStream.on('text', (text: string) => {
           chunks.push(text);
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ type: 'token', text })}\n\n`),
           );
-        }
+        });
+
+        await msgStream.finalMessage();
 
         const draft = chunks.join('');
         const verification = verifyExclusions(draft, exclusionsRequired);

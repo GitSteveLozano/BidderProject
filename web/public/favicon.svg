@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect x="0" y="0" width="64" height="64" rx="12" fill="#1f77b4"/>
+  <text
+    x="50%"
+    y="54%"
+    text-anchor="middle"
+    dominant-baseline="middle"
+    font-family="ui-sans-serif, system-ui, sans-serif"
+    font-size="32"
+    font-weight="700"
+    fill="white"
+  >P</text>
+</svg>
