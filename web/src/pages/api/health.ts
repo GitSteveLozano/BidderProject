@@ -2,11 +2,13 @@
  * GET /api/health
  *
  * Diagnostic endpoint — surfaces runtime state without leaking secrets.
- *
- * Lives in src/pages/api/ rather than functions/api/ because Astro's
- * Cloudflare adapter generates a _worker.js that intercepts every
- * route, so standalone Pages Functions in `functions/` never run.
- * Astro API routes get the same env via `locals.runtime.env`.
+ * Reports:
+ *   - env var presence (set / missing)
+ *   - which Supabase project is being hit (the URL's project ref)
+ *   - reachability + companies_count
+ *   - which bidintel tables exist
+ *   - first 3 company rows (for cross-checking)
+ *   - nodejs_compat status
  */
 
 import type { APIRoute } from 'astro';
@@ -25,29 +27,72 @@ export const GET: APIRoute = async ({ locals }) => {
     SUPABASE_SERVICE_KEY: env.SUPABASE_SERVICE_KEY ? 'set' : 'missing',
   };
 
-  // Probe nodejs_compat: when the flag is on, the Cloudflare runtime
-  // polyfills Node globals like `Buffer` and `process`. When off, both
-  // are undefined. Use globalThis access so vite doesn't try to
-  // statically resolve `node:buffer` at build time.
+  // Extract project ref from the URL — so you can sanity-check against
+  // your Supabase dashboard URL (https://supabase.com/dashboard/project/<ref>).
+  // Reveals just the ref, not the API key.
+  const projectRef = env.SUPABASE_URL
+    ? new URL(env.SUPABASE_URL).hostname.split('.')[0]
+    : null;
+
   const hasBuffer = typeof (globalThis as any).Buffer !== 'undefined';
   const hasProcess = typeof (globalThis as any).process !== 'undefined';
   const nodeCompat: 'yes' | 'no' = hasBuffer && hasProcess ? 'yes' : 'no';
 
-  // Probe Supabase reachability — cheapest possible query, head-only.
-  let supabase: { ok: boolean; companies_count?: number; error?: string };
-  if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
+  const supabase: {
+    ok: boolean;
+    project_ref?: string | null;
+    companies_count?: number;
+    tables_seen?: string[];
+    company_samples?: Array<{ id: string; name: string }>;
+    error?: string;
+  } = { ok: false, project_ref: projectRef };
+
+  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_KEY) {
     try {
       const sb = supabaseClient(env, 'service');
-      const { count, error } = await sb
+
+      const { count, error: countErr } = await sb
         .from('companies')
         .select('*', { count: 'exact', head: true });
-      if (error) supabase = { ok: false, error: error.message };
-      else supabase = { ok: true, companies_count: count ?? 0 };
+      if (countErr) {
+        supabase.error = `companies count: ${countErr.message} (code=${countErr.code})`;
+      } else {
+        supabase.companies_count = count ?? 0;
+      }
+
+      // Sample the first 3 companies so you can cross-check against the
+      // Supabase Table Editor — confirms which project is actually being hit.
+      const { data: companies } = await sb
+        .from('companies')
+        .select('id, name')
+        .order('name')
+        .limit(3);
+      supabase.company_samples = companies ?? [];
+
+      // List the bidintel tables we expect to find. Using information_schema
+      // would be cleaner but PostgREST doesn't expose it by default — we
+      // probe each table individually with a head-only count to see what
+      // responds.
+      const expectedTables = [
+        'companies', 'service_lines', 'employees', 'burden_components',
+        'bids', 'job_cost_reconciliation', 'voice_patterns', 'pricing_logic',
+        'schedule_allocations', 'intelligence_insights',
+      ];
+      const seen: string[] = [];
+      await Promise.all(
+        expectedTables.map(async (t) => {
+          const { error } = await sb.from(t).select('*', { count: 'exact', head: true });
+          if (!error) seen.push(t);
+        }),
+      );
+      supabase.tables_seen = seen;
+      supabase.ok =
+        countErr == null && supabase.companies_count != null;
     } catch (e) {
-      supabase = { ok: false, error: e instanceof Error ? e.message : String(e) };
+      supabase.error = e instanceof Error ? e.message : String(e);
     }
   } else {
-    supabase = { ok: false, error: 'env vars not set' };
+    supabase.error = 'env vars not set';
   }
 
   const ok =
@@ -56,6 +101,7 @@ export const GET: APIRoute = async ({ locals }) => {
     envStatus.SUPABASE_SERVICE_KEY === 'set' &&
     envStatus.ANTHROPIC_API_KEY === 'set' &&
     supabase.ok &&
+    (supabase.companies_count ?? 0) > 0 &&
     nodeCompat === 'yes';
 
   return new Response(
@@ -66,7 +112,16 @@ export const GET: APIRoute = async ({ locals }) => {
     ),
     {
       status: ok ? 200 : 503,
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        // Diagnostic endpoint — never serve from edge cache or
+        // browser cache. Cloudflare aggressively caches successful
+        // JSON responses by default, which masked our debugging
+        // when companies_count flipped from 0 to 15 in the DB but
+        // /api/health kept returning the stale 0 result.
+        'cache-control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'cdn-cache-control': 'no-store',
+      },
     },
   );
 };
