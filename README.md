@@ -72,11 +72,31 @@ celery -A core.celery_app beat --loglevel=INFO
 ```bash
 python cli.py health             # check DB + schema + companies
 python cli.py seed --archetype a # seed just Archetype A
+python cli.py ingest             # bulk-load data/raw/ past quotes + samples
 python cli.py demo               # run end-to-end demo flow
 python cli.py capacity --company-id <uuid>
 python cli.py intelligence --company-id <uuid>
 python cli.py reset --yes        # wipe and re-seed (spec §11 Risk 2)
 ```
+
+### Or via `just`
+
+```bash
+just install         # pip install -e ".[dev]"
+just schema          # apply db/schema.sql
+just seed            # seed all 3 archetypes
+just ingest          # bulk-load corpus
+just test            # run pytest
+just api             # uvicorn with reload
+just ui              # streamlit
+just up              # docker compose up
+just reset           # wipe + re-seed
+```
+
+### Demo
+
+See `docs/demo_storyboard.md` for the 7.5-minute walkthrough mapped to
+spec §8.6.
 
 ## Models
 

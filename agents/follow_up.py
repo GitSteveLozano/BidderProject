@@ -9,14 +9,12 @@ import json
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from core.anthropic_client import complete
-from core.db import execute, fetch_one
-from core.settings import get_settings
-from tools.cadence_lookup import get_optimal_cadence
-
 
 def schedule_follow_ups(bid_id: UUID | str, client_segment: str = "repeat") -> list[dict]:
     """Schedule the segment-appropriate sequence of follow-ups."""
+    from core.db import execute
+    from tools.cadence_lookup import get_optimal_cadence
+
     bid_id = str(bid_id)
     cadence = get_optimal_cadence(client_segment)
     sent_at = datetime.utcnow()
@@ -43,6 +41,11 @@ def schedule_follow_ups(bid_id: UUID | str, client_segment: str = "repeat") -> l
 
 def draft_message(bid_id: UUID | str, sequence_number: int) -> dict:
     """Draft a follow-up in the company's voice for the given sequence step."""
+    from core.anthropic_client import complete
+    from core.db import execute, fetch_one
+    from core.settings import get_settings
+    from tools.cadence_lookup import get_optimal_cadence
+
     bid_id = str(bid_id)
     bid = fetch_one(
         """

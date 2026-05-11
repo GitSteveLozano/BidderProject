@@ -50,6 +50,7 @@ page = st.sidebar.radio(
         "Follow-ups",
         "Job-Cost Reconciliation",
         "Intelligence Dashboard",
+        "Cross-archetype compare",
         "Agent Architecture",
     ],
 )
@@ -469,6 +470,96 @@ elif page == "Intelligence Dashboard":
         fig2.add_hline(y=85, line_dash="dash", line_color="orange",
                        annotation_text="hold-firm threshold")
         st.plotly_chart(fig2, use_container_width=True)
+
+
+# ─── Page: Cross-archetype compare ─────────────────────────────
+elif page == "Cross-archetype compare":
+    st.header("Cross-archetype side-by-side")
+    st.caption(
+        "Same architecture, different business shape (spec §8.2-8.3). The "
+        "Context agent's profile drives all downstream behavior."
+    )
+
+    archetypes = fetch_all(
+        """
+        SELECT id, name, segment, primary_trade, annual_revenue_band,
+               years_in_business
+        FROM companies WHERE onboarded_at IS NOT NULL ORDER BY name
+        """
+    )
+    if len(archetypes) < 2:
+        st.info("Need at least 2 onboarded archetypes. Run `python -m db.seed_all`.")
+    else:
+        names = [a["name"] for a in archetypes]
+        c_left, c_right = st.columns(2)
+        with c_left:
+            left_name = st.selectbox("Left", names, index=0, key="left_compare")
+        with c_right:
+            right_name = st.selectbox(
+                "Right", names, index=min(1, len(names) - 1), key="right_compare"
+            )
+        left_id = next(a["id"] for a in archetypes if a["name"] == left_name)
+        right_id = next(a["id"] for a in archetypes if a["name"] == right_name)
+
+        def _render_archetype(col, cid):
+            info = fetch_one("SELECT * FROM companies WHERE id = %s", (cid,))
+            voice = fetch_one("SELECT * FROM voice_patterns WHERE company_id = %s", (cid,))
+            sls = fetch_all(
+                """
+                SELECT line_name, typical_margin_pct, pricing_unit, standard_exclusions
+                FROM service_lines WHERE company_id = %s ORDER BY line_name
+                """, (cid,),
+            )
+            pl = fetch_one("SELECT * FROM pricing_logic WHERE company_id = %s", (cid,))
+
+            col.subheader(info["name"])
+            col.caption(
+                f"{info['segment']} • {info['primary_trade']} • "
+                f"{info.get('annual_revenue_band') or '—'}"
+            )
+            col.markdown("**Tone:**")
+            col.write((voice or {}).get("tone") or "—")
+            col.markdown("**Boilerplate intro:**")
+            col.code((voice or {}).get("boilerplate_intro") or "—", language="text")
+            col.markdown("**Service lines:**")
+            for sl in sls or []:
+                col.markdown(
+                    f"- **{sl['line_name']}** · `{sl.get('pricing_unit')}` · "
+                    f"{sl.get('typical_margin_pct') or '—'}% margin"
+                )
+            col.markdown("**Pricing logic:**")
+            if pl:
+                col.markdown(
+                    f"- Target margin: {pl.get('target_margin_pct')}%  \n"
+                    f"- Range: {pl.get('margin_range_low_pct')}–"
+                    f"{pl.get('margin_range_high_pct')}%  \n"
+                    f"- Capacity behavior: `{pl.get('capacity_discount_behavior')}`  \n"
+                    f"- Payment: {pl.get('payment_terms_default') or '—'}"
+                )
+            col.markdown("**First service line's exclusions:**")
+            if sls and sls[0].get("standard_exclusions"):
+                for e in sls[0]["standard_exclusions"][:5]:
+                    col.markdown(f"  - {e}")
+                if len(sls[0]["standard_exclusions"]) > 5:
+                    col.caption(f"…and {len(sls[0]['standard_exclusions']) - 5} more")
+
+        col_a, col_b = st.columns(2)
+        _render_archetype(col_a, left_id)
+        _render_archetype(col_b, right_id)
+
+        st.markdown("---")
+        st.markdown(
+            "### What this demonstrates\n\n"
+            "The 8-agent architecture is unchanged. What differs is the "
+            "**Context agent's extracted profile** — voice, service lines, "
+            "exclusions, pricing logic — which drives downstream behavior:\n\n"
+            "- **Composition** writes in the company's voice with its boilerplate.\n"
+            "- **Pricing** uses the company's loaded labor + margin logic.\n"
+            "- **Composition** verifies the company's standard exclusions are present.\n"
+            "- **Follow-up** routes by `segment` (repeat = 1 touch; cold = 3).\n\n"
+            "Same code path, different output. This is the spec's "
+            "horizontal-entry / vertical-expansion strategy (§2.1)."
+        )
 
 
 # ─── Page: Agent Architecture ─────────────────────────────────

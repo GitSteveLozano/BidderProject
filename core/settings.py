@@ -27,6 +27,12 @@ class Settings(BaseSettings):
         alias="DEMO_COMPANY_ID",
     )
 
+    # Feature flag: use the proper Anthropic tool-use Pricing variant
+    # (agents/pricing_tool_use.py) instead of the deterministic-Python
+    # variant (agents/pricing.py). Tool-use makes the demo's "not a
+    # GPT wrapper" angle stronger but adds ~5-10s and an API call.
+    use_tool_use_pricing: bool = Field(default=False, alias="USE_TOOL_USE_PRICING")
+
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
 

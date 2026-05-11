@@ -387,6 +387,10 @@ def _generate_historical_bids() -> None:
 
 
 def run() -> None:
+    from db.seed_utils import wipe_company_data
+
+    print(f"Wiping prior data for company {COMPANY_ID}...")
+    wipe_company_data(COMPANY_ID)
     print(f"Seeding Archetype B (Vantage Millwork) company {COMPANY_ID}...")
     seed_company()
     seed_voice()

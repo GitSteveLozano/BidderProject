@@ -9,11 +9,6 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from core.anthropic_client import complete
-from core.db import fetch_one
-from core.settings import get_settings
-from tools.exclusions_verify import verify_exclusions
-
 SYSTEM_PROMPT = """You write specialty-contractor bid documents in the
 company's own voice. You have:
 - The company's voice patterns (tone, sentence length, preferred terms, boilerplate)
@@ -65,6 +60,8 @@ Write the bid document."""
 
 
 def _get_voice(company_id: UUID | str) -> dict:
+    from core.db import fetch_one
+
     row = fetch_one(
         "SELECT * FROM voice_patterns WHERE company_id = %s", (str(company_id),)
     )
@@ -72,6 +69,8 @@ def _get_voice(company_id: UUID | str) -> dict:
 
 
 def _get_service_line(company_id: UUID | str, service_line: str) -> dict:
+    from core.db import fetch_one
+
     row = fetch_one(
         "SELECT * FROM service_lines WHERE company_id = %s AND line_name = %s",
         (str(company_id), service_line),
@@ -97,6 +96,10 @@ def compose_bid(
         "exclusions_missing": [str],
       }
     """
+    from core.anthropic_client import complete
+    from core.settings import get_settings
+    from tools.exclusions_verify import verify_exclusions
+
     voice = _get_voice(company_id)
     sl = _get_service_line(company_id, service_line)
     exclusions_required = sl.get("standard_exclusions") or []

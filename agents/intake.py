@@ -9,10 +9,6 @@ from __future__ import annotations
 import json
 import logging
 
-from core.anthropic_client import complete_json
-from core.settings import get_settings
-from tools.pdf_extraction import classify_document_hint
-
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You parse construction-industry documents into structured JSON.
@@ -77,6 +73,10 @@ def run(document_id: str, filename: str, text: str, document_type_hint: str | No
     Inputs: document_id (uuid str), filename, raw text, optional type hint.
     Output: structured JSON dict (see USER_TEMPLATE).
     """
+    from core.anthropic_client import complete_json
+    from core.settings import get_settings
+    from tools.pdf_extraction import classify_document_hint
+
     settings = get_settings()
     hint = document_type_hint or classify_document_hint(filename, text)
     user_msg = USER_TEMPLATE.format(filename=filename, hint=hint, text=text[:8000])

@@ -11,16 +11,13 @@ import json
 from datetime import date, timedelta
 from uuid import UUID
 
-from core.anthropic_client import complete
-from core.db import execute, fetch_all, fetch_one
-from core.settings import get_settings
-from tools.capacity_lookup import get_capacity_utilization
-
 MIN_SUPPORTING_BIDS = 15
 NOISE_FLOOR_MARGIN_DRIFT_PCT = 3.0
 
 
 def _get_margin_trend(company_id: str) -> list[dict]:
+    from core.db import fetch_all
+
     return fetch_all(
         """
         SELECT b.service_line,
@@ -39,6 +36,8 @@ def _get_margin_trend(company_id: str) -> list[dict]:
 
 
 def _get_open_quotes(company_id: str) -> list[dict]:
+    from core.db import fetch_all
+
     return fetch_all(
         """
         SELECT id, client_name, service_line, estimated_value, estimated_start_date,
@@ -55,6 +54,8 @@ def _get_open_quotes(company_id: str) -> list[dict]:
 
 
 def _exclusion_gap_pattern(company_id: str) -> dict | None:
+    from core.db import fetch_all
+
     rows = fetch_all(
         """
         SELECT service_line, exclusions_missing
@@ -90,6 +91,8 @@ def _write_insight(
     projected_impact: str,
     supporting_bids: list[str],
 ) -> None:
+    from core.db import execute
+
     execute(
         """
         INSERT INTO intelligence_insights (
@@ -112,6 +115,9 @@ def _write_insight(
 
 def run_weekly_analysis(company_id: UUID | str) -> list[dict]:
     """Spec §5.8 entry point. Returns list of generated insights."""
+    from core.db import fetch_one
+    from tools.capacity_lookup import get_capacity_utilization
+
     company_id = str(company_id)
     generated: list[dict] = []
 
@@ -217,6 +223,9 @@ def run_weekly_analysis(company_id: UUID | str) -> list[dict]:
 
 
 def _llm_insight_narrative(category: str, facts: dict, guidance: str) -> str:
+    from core.anthropic_client import complete
+    from core.settings import get_settings
+
     return complete(
         model=get_settings().model_sonnet,
         system=(

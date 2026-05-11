@@ -98,6 +98,7 @@ def run_assessment(bid_id: UUID | str, labor_plan: list[dict], material_quantity
     """
     from agents import composition, pricing
     from core.db import execute, fetch_one
+    from core.settings import get_settings
 
     bid_id = str(bid_id)
     bid = fetch_one(
@@ -113,14 +114,29 @@ def run_assessment(bid_id: UUID | str, labor_plan: list[dict], material_quantity
     if bid["state"] == BidState.RFP_RECEIVED.value:
         transition(bid_id, BidState.ASSESSING, "auto", "begin assessment")
 
-    pricing_result = pricing.compute_pricing(
-        company_id=bid["company_id"],
-        service_line=bid["service_line"],
-        labor_plan=labor_plan,
-        material_quantity=material_quantity,
-        estimated_start_date=bid["estimated_start_date"] or date.today(),
-        client_segment=bid["client_segment"] or "repeat",
-    )
+    # Feature flag: use proper Anthropic tool-use Pricing variant when
+    # USE_TOOL_USE_PRICING=true. Default is the deterministic-Python
+    # variant which is faster and doesn't need an API key.
+    if get_settings().use_tool_use_pricing:
+        from agents import pricing_tool_use
+        from datetime import date as _date
+
+        pricing_result = pricing_tool_use.compute_pricing_tool_use(
+            company_id=bid["company_id"],
+            service_line=bid["service_line"],
+            labor_plan=labor_plan,
+            material_quantity=material_quantity,
+            estimated_start_date=bid["estimated_start_date"] or _date.today(),
+        )
+    else:
+        pricing_result = pricing.compute_pricing(
+            company_id=bid["company_id"],
+            service_line=bid["service_line"],
+            labor_plan=labor_plan,
+            material_quantity=material_quantity,
+            estimated_start_date=bid["estimated_start_date"] or date.today(),
+            client_segment=bid["client_segment"] or "repeat",
+        )
 
     composition_result = composition.compose_bid(
         company_id=bid["company_id"],

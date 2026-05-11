@@ -131,6 +131,21 @@ def cmd_capacity(args) -> int:
     return 0
 
 
+def cmd_ingest(args) -> int:
+    """Bulk-load data/raw/ into the documents table."""
+    from pathlib import Path
+
+    from core.settings import get_settings
+    from db.ingest_corpus import ingest_directory
+
+    company_id = args.company_id or get_settings().demo_company_id
+    summary = ingest_directory(company_id, Path(args.dir), dry_run=args.dry_run)
+    print(f"Loaded:  {summary['loaded']}")
+    print(f"Skipped: {summary['skipped']} (already in DB)")
+    print(f"By type: {summary['by_type']}")
+    return 0
+
+
 def cmd_demo(args) -> int:
     """Run the full demo flow end-to-end. Useful for sanity checks before a live demo."""
     from agents import orchestrator
@@ -199,6 +214,12 @@ def main(argv: list[str] | None = None) -> int:
     p_cap.add_argument("--start", help="ISO date (default: today)")
     p_cap.add_argument("--weeks", type=int, default=8)
     p_cap.set_defaults(func=cmd_capacity)
+
+    p_ingest = sub.add_parser("ingest", help="bulk-load data/raw/ into documents")
+    p_ingest.add_argument("--company-id", help="defaults to DEMO_COMPANY_ID")
+    p_ingest.add_argument("--dir", default="data/raw", help="root directory to walk")
+    p_ingest.add_argument("--dry-run", action="store_true")
+    p_ingest.set_defaults(func=cmd_ingest)
 
     p_demo = sub.add_parser("demo", help="run the full demo flow end-to-end")
     p_demo.add_argument("--company-id", help="defaults to DEMO_COMPANY_ID")

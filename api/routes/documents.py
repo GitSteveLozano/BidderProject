@@ -1,14 +1,11 @@
 """Document upload + Intake agent invocation."""
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-
-from agents import intake
-from core.db import execute, fetch_all
-from core.embeddings import embed
-from tools.pdf_extraction import classify_document_hint
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -19,6 +16,9 @@ async def upload_document(
     document_type: str = Form("past_quote"),
     file: UploadFile = File(...),
 ) -> dict:
+    from core.db import execute
+    from core.embeddings import embed
+
     raw_bytes = await file.read()
     filename = file.filename or "upload"
 
@@ -47,9 +47,32 @@ async def upload_document(
     return {"document_id": doc_id, "filename": filename, "chars": len(text)}
 
 
+class IngestRequest(BaseModel):
+    company_id: UUID
+    directory: str = "data/raw"
+    dry_run: bool = False
+
+
+@router.post("/ingest")
+def ingest_corpus(payload: IngestRequest) -> dict:
+    """Bulk-load a directory of past quotes / sample inputs.
+
+    Maps to `python -m db.ingest_corpus` but callable via HTTP for the
+    Streamlit UI's onboarding step.
+    """
+    from db.ingest_corpus import ingest_directory
+
+    path = Path(payload.directory)
+    if not path.exists():
+        raise HTTPException(400, f"directory not found: {payload.directory}")
+    return ingest_directory(str(payload.company_id), path, dry_run=payload.dry_run)
+
+
 @router.post("/{document_id}/intake")
 def run_intake(document_id: UUID) -> dict:
-    from core.db import fetch_one
+    from agents import intake
+    from core.db import execute, fetch_one
+    from tools.pdf_extraction import classify_document_hint
 
     row = fetch_one(
         "SELECT filename, raw_text, type FROM documents WHERE id = %s", (str(document_id),)
@@ -72,6 +95,8 @@ def run_intake(document_id: UUID) -> dict:
 
 @router.get("/")
 def list_documents(company_id: UUID) -> list[dict]:
+    from core.db import fetch_all
+
     return fetch_all(
         """
         SELECT id, type, filename, uploaded_at, structured_data IS NOT NULL AS processed

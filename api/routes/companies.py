@@ -6,9 +6,6 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from agents import context as context_agent
-from core.db import execute, fetch_all, fetch_one
-
 router = APIRouter()
 
 
@@ -20,11 +17,15 @@ class CompanyIn(BaseModel):
 
 @router.get("/")
 def list_companies() -> list[dict]:
+    from core.db import fetch_all
+
     return fetch_all("SELECT id, name, segment, onboarded_at FROM companies ORDER BY name")
 
 
 @router.post("/")
 def create_company(payload: CompanyIn) -> dict:
+    from core.db import fetch_one
+
     row = fetch_one(
         """
         INSERT INTO companies (name, primary_trade, segment)
@@ -38,6 +39,8 @@ def create_company(payload: CompanyIn) -> dict:
 
 @router.get("/{company_id}")
 def get_company(company_id: UUID) -> dict:
+    from agents import context as context_agent
+
     profile = context_agent.get_company_profile(company_id)
     if not profile.get("company"):
         raise HTTPException(404, "company not found")
@@ -51,6 +54,9 @@ def onboard(company_id: UUID) -> dict:
     Runs Context agent to extract voice, service lines, pricing logic from
     uploaded past quotes.
     """
+    from agents import context as context_agent
+    from core.db import execute
+
     voice = context_agent.extract_voice_patterns(company_id)
     service_lines = context_agent.extract_service_lines(company_id)
 
@@ -143,6 +149,8 @@ class QueryIn(BaseModel):
 
 @router.post("/{company_id}/query")
 def query(company_id: UUID, payload: QueryIn) -> dict:
+    from agents import context as context_agent
+
     return context_agent.answer_query(company_id, payload.query)
 
 

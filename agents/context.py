@@ -9,11 +9,6 @@ from __future__ import annotations
 import json
 from uuid import UUID
 
-from core.anthropic_client import complete, complete_json
-from core.db import fetch_all, fetch_one
-from core.settings import get_settings
-from tools.vector_search import search_documents
-
 EXTRACT_VOICE_SYSTEM = """You analyze past quotes from a specialty contractor and
 extract their writing voice patterns. You return strict JSON.
 
@@ -78,6 +73,8 @@ Return ONLY the JSON."""
 
 
 def _get_company_documents(company_id: UUID | str, doc_type: str = "past_quote") -> list[dict]:
+    from core.db import fetch_all
+
     return fetch_all(
         """
         SELECT id, filename, raw_text, structured_data
@@ -92,6 +89,9 @@ def _get_company_documents(company_id: UUID | str, doc_type: str = "past_quote")
 
 def extract_voice_patterns(company_id: UUID | str) -> dict:
     """Extract voice patterns from past quotes. Writes to voice_patterns."""
+    from core.anthropic_client import complete_json
+    from core.settings import get_settings
+
     docs = _get_company_documents(company_id)
     if not docs:
         return {"error": "no past quotes for company", "n_documents": 0}
@@ -112,6 +112,9 @@ def extract_voice_patterns(company_id: UUID | str) -> dict:
 
 
 def extract_service_lines(company_id: UUID | str) -> list[dict]:
+    from core.anthropic_client import complete_json
+    from core.settings import get_settings
+
     docs = _get_company_documents(company_id)
     if not docs:
         return []
@@ -131,6 +134,8 @@ def extract_service_lines(company_id: UUID | str) -> list[dict]:
 
 def get_company_profile(company_id: UUID | str) -> dict:
     """Pull all profile tables for the company in one call."""
+    from core.db import fetch_all, fetch_one
+
     company = fetch_one("SELECT * FROM companies WHERE id = %s", (str(company_id),))
     voice = fetch_one("SELECT * FROM voice_patterns WHERE company_id = %s", (str(company_id),))
     service_lines = fetch_all(
@@ -154,6 +159,10 @@ def get_company_profile(company_id: UUID | str) -> dict:
 
 def answer_query(company_id: UUID | str, query: str) -> dict:
     """Synthesize an answer about a company using retrieved context."""
+    from core.anthropic_client import complete
+    from core.settings import get_settings
+    from tools.vector_search import search_documents
+
     profile = get_company_profile(company_id)
     hits = search_documents(company_id, query, limit=5)
     context_chunks = "\n\n".join(

@@ -9,17 +9,15 @@ from __future__ import annotations
 import json
 from uuid import UUID
 
-from core.anthropic_client import complete
-from core.db import execute, fetch_all, fetch_one
-from core.settings import get_settings
-from tools.actual_hours_lookup import get_actual_labor_hours, get_quoted_labor_summary
-
 
 def reconcile_job(
     bid_id: UUID | str,
     actual_material_cost: float | None = None,
     actual_other_costs: float = 0.0,
 ) -> dict:
+    from core.db import execute, fetch_one
+    from tools.actual_hours_lookup import get_actual_labor_hours, get_quoted_labor_summary
+
     """Sync reconciliation. Spec §5.6 — runs on JOB_COMPLETE transition.
 
     Computes delivered_margin_pct, writes job_cost_reconciliation row,
@@ -129,6 +127,8 @@ def detect_patterns(company_id: UUID | str) -> list[dict]:
 
     Spec §5.6: pattern claims require n>=8 completed jobs in a service line.
     """
+    from core.db import execute, fetch_all
+
     company_id = str(company_id)
     rows = fetch_all(
         """
@@ -177,6 +177,9 @@ def detect_patterns(company_id: UUID | str) -> list[dict]:
 
 def narrate_reconciliation(reconciliation: dict, bid_summary: dict) -> str:
     """Sonnet narrates the variance story. Numbers come from `reconciliation`."""
+    from core.anthropic_client import complete
+    from core.settings import get_settings
+
     return complete(
         model=get_settings().model_sonnet,
         system=(

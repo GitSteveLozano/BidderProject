@@ -6,15 +6,13 @@ from uuid import UUID
 
 from fastapi import APIRouter
 
-from agents import intelligence
-from core.db import fetch_all
-from tools.capacity_lookup import get_capacity_utilization
-
 router = APIRouter()
 
 
 @router.get("/{company_id}/insights")
 def get_insights(company_id: UUID, status: str = "open", limit: int = 10) -> list[dict]:
+    from core.db import fetch_all
+
     return fetch_all(
         """
         SELECT id, category, severity, headline, finding, recommendation,
@@ -30,17 +28,23 @@ def get_insights(company_id: UUID, status: str = "open", limit: int = 10) -> lis
 
 @router.post("/{company_id}/run")
 def run_analysis(company_id: UUID) -> dict:
+    from agents import intelligence
+
     generated = intelligence.run_weekly_analysis(company_id)
     return {"generated": generated, "count": len(generated)}
 
 
 @router.get("/{company_id}/capacity")
 def capacity(company_id: UUID, weeks: int = 8) -> dict:
+    from tools.capacity_lookup import get_capacity_utilization
+
     return get_capacity_utilization(company_id, date.today(), weeks=weeks)
 
 
 @router.get("/{company_id}/margin-by-service-line")
 def margin_by_service_line(company_id: UUID) -> list[dict]:
+    from core.db import fetch_all
+
     return fetch_all(
         """
         SELECT b.service_line,

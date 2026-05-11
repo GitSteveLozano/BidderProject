@@ -7,9 +7,6 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from agents import follow_up, jcr, orchestrator
-from core.db import fetch_all, fetch_one
-
 router = APIRouter()
 
 
@@ -36,6 +33,8 @@ class AssessmentIn(BaseModel):
 
 @router.get("/")
 def list_bids(company_id: UUID, state: str | None = None) -> list[dict]:
+    from core.db import fetch_all
+
     if state:
         return fetch_all(
             """
@@ -58,6 +57,8 @@ def list_bids(company_id: UUID, state: str | None = None) -> list[dict]:
 
 @router.post("/")
 def create_bid(payload: BidCreate) -> dict:
+    from agents import orchestrator
+
     bid_id = orchestrator.create_bid(
         company_id=payload.company_id,
         client_name=payload.client_name,
@@ -73,6 +74,9 @@ def create_bid(payload: BidCreate) -> dict:
 
 @router.get("/{bid_id}")
 def get_bid(bid_id: UUID) -> dict:
+    from agents import orchestrator
+    from core.db import fetch_one
+
     bid = fetch_one("SELECT * FROM bids WHERE id = %s", (str(bid_id),))
     if not bid:
         raise HTTPException(404, "bid not found")
@@ -82,6 +86,8 @@ def get_bid(bid_id: UUID) -> dict:
 
 @router.post("/{bid_id}/assess")
 def assess(bid_id: UUID, payload: AssessmentIn) -> dict:
+    from agents import orchestrator
+
     return orchestrator.run_assessment(
         bid_id=bid_id,
         labor_plan=[lp.model_dump() for lp in payload.labor_plan],
@@ -96,16 +102,22 @@ class ExclusionsDecision(BaseModel):
 
 @router.post("/{bid_id}/exclusions-decision")
 def exclusions_decision(bid_id: UUID, payload: ExclusionsDecision) -> dict:
+    from agents import orchestrator
+
     return orchestrator.accept_exclusions(bid_id, payload.accepted, payload.skipped)
 
 
 @router.post("/{bid_id}/submit-for-review")
 def submit_for_review(bid_id: UUID) -> dict:
+    from agents import orchestrator
+
     return orchestrator.submit_for_human_review(bid_id)
 
 
 @router.post("/{bid_id}/send")
 def send(bid_id: UUID) -> dict:
+    from agents import orchestrator
+
     return orchestrator.send_bid(bid_id)
 
 
@@ -118,6 +130,8 @@ class OutcomeIn(BaseModel):
 
 @router.post("/{bid_id}/outcome")
 def outcome(bid_id: UUID, payload: OutcomeIn) -> dict:
+    from agents import orchestrator
+
     return orchestrator.capture_outcome(
         bid_id,
         payload.outcome,
@@ -129,16 +143,22 @@ def outcome(bid_id: UUID, payload: OutcomeIn) -> dict:
 
 @router.post("/{bid_id}/start-job")
 def start_job(bid_id: UUID) -> dict:
+    from agents import orchestrator
+
     return orchestrator.mark_job_started(bid_id)
 
 
 @router.post("/{bid_id}/complete-job")
 def complete_job(bid_id: UUID) -> dict:
+    from agents import orchestrator
+
     return orchestrator.mark_job_complete(bid_id)
 
 
 @router.get("/{bid_id}/reconciliation")
 def get_reconciliation(bid_id: UUID) -> dict:
+    from core.db import fetch_one
+
     row = fetch_one(
         "SELECT * FROM job_cost_reconciliation WHERE bid_id = %s", (str(bid_id),)
     )
@@ -153,11 +173,15 @@ class FollowUpDraftIn(BaseModel):
 
 @router.post("/{bid_id}/follow-up/draft")
 def draft_follow_up(bid_id: UUID, payload: FollowUpDraftIn) -> dict:
+    from agents import follow_up
+
     return follow_up.draft_message(bid_id, payload.sequence_number)
 
 
 @router.get("/{bid_id}/follow-ups")
 def list_follow_ups(bid_id: UUID) -> list[dict]:
+    from core.db import fetch_all
+
     return fetch_all(
         """
         SELECT id, sequence_number, scheduled_for, state, channel,

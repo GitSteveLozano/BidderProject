@@ -10,16 +10,10 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from core.anthropic_client import complete
-from core.db import fetch_one
-from core.settings import get_settings
-from tools.capacity_lookup import capacity_modifier, get_capacity_utilization
-from tools.labor_cost_lookup import get_loaded_labor_cost
-from tools.material_cost_lookup import lookup_material_cost
-from tools.win_rate_lookup import get_win_rate_at_price
-
 
 def _get_pricing_logic(company_id: UUID | str) -> dict:
+    from core.db import fetch_one
+
     row = fetch_one(
         "SELECT * FROM pricing_logic WHERE company_id = %s", (str(company_id),)
     )
@@ -28,6 +22,8 @@ def _get_pricing_logic(company_id: UUID | str) -> dict:
 
 def _labor_breakdown(company_id: str, labor_plan: list[dict]) -> dict:
     """labor_plan: [{trade: str, hours: float}, ...]. Returns merged breakdown."""
+    from tools.labor_cost_lookup import get_loaded_labor_cost
+
     by_trade = []
     subtotal = 0.0
     total_hours = 0
@@ -60,6 +56,10 @@ def compute_pricing(
     All numbers come from tool calls; only the narrative rationale is LLM-
     generated.
     """
+    from tools.capacity_lookup import capacity_modifier, get_capacity_utilization
+    from tools.material_cost_lookup import lookup_material_cost
+    from tools.win_rate_lookup import get_win_rate_at_price
+
     company_id = str(company_id)
     logic = _get_pricing_logic(company_id)
 
@@ -120,6 +120,9 @@ def compute_pricing(
 
 def _generate_narrative(breakdown: dict, client_segment: str) -> str:
     """LLM writes a short rationale. NEVER asked to compute or alter numbers."""
+    from core.anthropic_client import complete
+    from core.settings import get_settings
+
     facts = {
         "target_price": breakdown["target_price"],
         "range_low": breakdown["range_low"],

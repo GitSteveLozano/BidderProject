@@ -796,6 +796,10 @@ def seed_past_quote_documents() -> None:
 
 
 def run() -> None:
+    from db.seed_utils import wipe_company_data
+
+    print(f"Wiping prior data for company {COMPANY_ID}...")
+    wipe_company_data(COMPANY_ID)
     print(f"Seeding company {COMPANY_ID}...")
     seed_company()
     seed_voice()
