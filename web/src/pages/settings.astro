@@ -38,10 +38,12 @@ const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' '
     <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1">
       Account
     </div>
-    <h1 class="font-serif text-[28px] font-medium leading-tight">Settings</h1>
-    <p class="mt-2 text-sm text-[color:var(--color-muted)]">
-      Signed in as <strong>{user.email}</strong>.
-      <a href="/auth/signout" class="ml-2 underline text-[color:var(--color-accent)] hover:brightness-95">Sign out</a>
+    <h1 class="font-serif text-[36px] font-medium leading-tight tracking-tight">
+      How Brief knows you.
+    </h1>
+    <p class="mt-3 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
+      Your shop, your license, your pricing defaults — the things Brief stamps on every quote. Change anything any time. Signed in as <strong class="font-medium">{user.email}</strong>.
+      <a href="/auth/signout" class="ml-1 underline text-[color:var(--color-accent)] hover:brightness-95">Sign out</a>
     </p>
   </div>
   <SettingsSections client:load />
