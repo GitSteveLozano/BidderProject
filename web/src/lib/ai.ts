@@ -24,6 +24,11 @@ export interface StreamOptions {
   messages: ChatMessage[];
   max_tokens?: number;
   temperature?: number;
+  /** Ask Workers AI to constrain output to a JSON object. Honored by
+   * the Llama 3.x family. Not all models support it — when unsupported
+   * the runtime falls back to plain text and we still tolerate the
+   * looser output via lib/json-extract.ts in the caller. */
+  json?: boolean;
 }
 
 const DEFAULT_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
@@ -41,12 +46,14 @@ export async function* streamText(
   opts: StreamOptions,
 ): AsyncGenerator<string> {
   if (!env.AI) throw new Error('Workers AI binding not configured');
-  const stream = (await env.AI.run(modelFor(env, opts.model), {
+  const params: Record<string, unknown> = {
     messages: opts.messages,
     max_tokens: opts.max_tokens ?? 700,
     temperature: opts.temperature ?? 0.5,
     stream: true,
-  })) as ReadableStream<Uint8Array>;
+  };
+  if (opts.json) params.response_format = { type: 'json_object' };
+  const stream = (await env.AI.run(modelFor(env, opts.model), params)) as ReadableStream<Uint8Array>;
 
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -81,10 +88,41 @@ export async function generateText(
   opts: StreamOptions,
 ): Promise<string> {
   if (!env.AI) throw new Error('Workers AI binding not configured');
-  const result = (await env.AI.run(modelFor(env, opts.model), {
+  const params: Record<string, unknown> = {
     messages: opts.messages,
     max_tokens: opts.max_tokens ?? 1500,
     temperature: opts.temperature ?? 0.2,
-  })) as { response?: string };
+  };
+  if (opts.json) params.response_format = { type: 'json_object' };
+  const result = (await env.AI.run(modelFor(env, opts.model), params)) as { response?: string };
   return (result.response ?? '').trim();
+}
+
+/** Tolerant JSON extractor. Models wrap output in ```fences, add
+ * preamble ("Here's the JSON:") or postamble. Tries direct parse,
+ * fenced-extract, and the first `{...}` block. Returns null on
+ * total failure so the caller can surface the raw text for
+ * diagnosis instead of a swallowed exception. */
+export function extractJson<T = unknown>(raw: string): T | null {
+  if (!raw) return null;
+  // Strategy 1: maybe it's already clean JSON.
+  try {
+    return JSON.parse(raw) as T;
+  } catch {}
+  // Strategy 2: fenced ```json ... ``` block.
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenced) {
+    try {
+      return JSON.parse(fenced[1]) as T;
+    } catch {}
+  }
+  // Strategy 3: substring from first '{' to last '}'.
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(raw.slice(start, end + 1)) as T;
+    } catch {}
+  }
+  return null;
 }
