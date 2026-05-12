@@ -24,6 +24,7 @@ const EDITABLE: ReadonlyArray<string> = [
   'default_margin_range_low',
   'default_margin_range_high',
   'google_calendar_connected',
+  'google_calendar_scope',
   'voice_sample_url',
   'voice_profile',
   'onboarding_completed_at',
