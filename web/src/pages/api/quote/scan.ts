@@ -20,7 +20,7 @@
  */
 import type { APIRoute } from 'astro';
 
-import { streamText } from '@/lib/ai';
+import { streamText, extractJson } from '@/lib/ai';
 
 export const prerender = false;
 
@@ -97,6 +97,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
         for await (const chunk of streamText(env, {
           max_tokens: 4000,
           temperature: 0.2,
+          json: true,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: userMsg },
@@ -107,7 +108,36 @@ export const POST: APIRoute = async ({ request, locals }) => {
           emit({ type: 'progress', percent });
         }
 
-        const { line_items, flags, scope_summary } = parseScan(full);
+        const parsed = extractJson<{
+          line_items?: Array<Record<string, any>>;
+          flags?: Array<{ kind?: string; text?: string }>;
+          scope_summary?: string;
+        }>(full);
+
+        if (!parsed) {
+          // Model returned text we couldn't extract a JSON object from.
+          // Surface the raw output so the operator can see what came
+          // back. Continue button still un-greys via the relaxed
+          // disabled check; operator can manually add lines.
+          emit({
+            type: 'flag',
+            payload: {
+              kind: 'warn',
+              text: `Couldn't parse line items from Brief's output. Raw response below — start the scope manually or retry.`,
+            },
+          });
+          emit({
+            type: 'flag',
+            payload: {
+              kind: 'info',
+              text: full.slice(0, 800),
+            },
+          });
+        }
+
+        const line_items = Array.isArray(parsed?.line_items) ? parsed!.line_items : [];
+        const flags = Array.isArray(parsed?.flags) ? parsed!.flags : [];
+        const scope_summary = typeof parsed?.scope_summary === 'string' ? parsed!.scope_summary : '';
 
         for (let i = 0; i < line_items.length; i += 1) {
           const li = line_items[i];
@@ -123,6 +153,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
             line_item_count: line_items.length,
             flag_count: flags.length,
             scope_summary,
+            parsed: parsed != null,
           },
         });
         controller.close();
@@ -141,27 +172,6 @@ export const POST: APIRoute = async ({ request, locals }) => {
     },
   });
 };
-
-interface ScanResult {
-  line_items: Array<Record<string, any>>;
-  flags: Array<{ kind: string; text: string }>;
-  scope_summary: string;
-}
-
-function parseScan(text: string): ScanResult {
-  const fenced = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-  const payload = fenced ? fenced[1] : text.match(/\{[\s\S]*\}/)?.[0] ?? text;
-  try {
-    const parsed = JSON.parse(payload);
-    return {
-      line_items: Array.isArray(parsed.line_items) ? parsed.line_items : [],
-      flags: Array.isArray(parsed.flags) ? parsed.flags : [],
-      scope_summary: typeof parsed.scope_summary === 'string' ? parsed.scope_summary : '',
-    };
-  } catch {
-    return { line_items: [], flags: [], scope_summary: '' };
-  }
-}
 
 function round(n: number, decimals: number): number {
   const m = Math.pow(10, decimals);

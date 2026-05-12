@@ -903,8 +903,13 @@ function ScopeStep(p: {
 
       <div class="mt-6 flex items-center justify-between">
         <Button variant="ghost" onClick={p.onBack}>← Back</Button>
-        <Button variant="accent" disabled={p.scanning() || p.lineItems().length === 0} onClick={p.onContinue}>
-          Continue to pricing →
+        {/* Gated only on the scan still running. Zero-item scans
+            still let the operator advance — Pricing step has an
+            "Add line" UI that can recover from a thin extract. */}
+        <Button variant="accent" disabled={p.scanning()} onClick={p.onContinue}>
+          {p.lineItems().length === 0 && !p.scanning()
+            ? 'Continue (add lines manually) →'
+            : 'Continue to pricing →'}
         </Button>
       </div>
     </div>

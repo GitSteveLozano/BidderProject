@@ -18,7 +18,7 @@
 import type { APIRoute } from 'astro';
 
 import { client as supabaseService } from '@/lib/supabase';
-import { streamText } from '@/lib/ai';
+import { streamText, extractJson } from '@/lib/ai';
 
 export const prerender = false;
 
@@ -82,6 +82,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
         for await (const chunk of streamText(env, {
           max_tokens: 2000,
           temperature: 0.3,
+          json: true,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             {
@@ -140,23 +141,15 @@ interface Signal {
 }
 
 function parseSignals(text: string): Signal[] {
-  // Tolerant JSON extract — strip fences if present, find the first
-  // {...} block, JSON.parse, pluck signals.
-  const fenced = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-  const payload = fenced ? fenced[1] : text.match(/\{[\s\S]*\}/)?.[0] ?? text;
-  try {
-    const parsed = JSON.parse(payload);
-    const arr = Array.isArray(parsed.signals) ? parsed.signals : [];
-    return arr
-      .filter((s: any) => s && typeof s.kind === 'string' && typeof s.value === 'string')
-      .map((s: any) => ({
-        kind: s.kind,
-        value: String(s.value),
-        evidence: typeof s.evidence === 'string' ? s.evidence : undefined,
-      }));
-  } catch {
-    return [];
-  }
+  const parsed = extractJson<{ signals?: Array<any> }>(text);
+  const arr = Array.isArray(parsed?.signals) ? parsed!.signals : [];
+  return arr
+    .filter((s: any) => s && typeof s.kind === 'string' && typeof s.value === 'string')
+    .map((s: any) => ({
+      kind: s.kind,
+      value: String(s.value),
+      evidence: typeof s.evidence === 'string' ? s.evidence : undefined,
+    }));
 }
 
 function buildProfile(signals: Signal[]) {

@@ -13,7 +13,7 @@
 import type { APIRoute } from 'astro';
 
 import { client as supabaseService } from '@/lib/supabase';
-import { generateText } from '@/lib/ai';
+import { generateText, extractJson } from '@/lib/ai';
 
 export const prerender = false;
 
@@ -150,6 +150,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     text = await generateText(env, {
       max_tokens: 1500,
       temperature: 0.2,
+      json: true,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userMsg },
@@ -159,13 +160,9 @@ export const POST: APIRoute = async ({ request, locals }) => {
     return json({ error: err instanceof Error ? err.message : String(err) }, 500);
   }
 
-  let parsed: any;
-  try {
-    const fenced = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-    const payload = fenced ? fenced[1] : text.match(/\{[\s\S]*\}/)?.[0] ?? text;
-    parsed = JSON.parse(payload);
-  } catch (err) {
-    return json({ error: `Could not parse postmortem JSON: ${err}` }, 502);
+  const parsed = extractJson<any>(text);
+  if (!parsed) {
+    return json({ error: 'Could not parse postmortem JSON', raw: text.slice(0, 500) }, 502);
   }
 
   // Pin authoritative numbers — never let the LLM fabricate the math.
