@@ -1,9 +1,7 @@
 ---
 import Brief from '@/layouts/Brief.astro';
-import StatusPill from '@/components/ui/StatusPill';
-import Pill from '@/components/ui/Pill';
+import ClientsView, { type ClientRow } from '@/components/clients/ClientsView';
 import { client as supabaseService } from '@/lib/supabase';
-import { fmtCurrencyCompact, fmtRelativeDate } from '@/lib/quote-helpers';
 
 export const prerender = false;
 Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
@@ -23,15 +21,58 @@ const { data: shop } = await svc
   .eq('id', membership.shop_id)
   .maybeSingle();
 
-const { data: clients } = await svc
+const { data: rawClients } = await svc
   .from('clients')
-  .select('id, name, type, primary_contact_name, total_quoted, total_won, win_rate_pct, last_activity_at')
+  .select('id, name, type, primary_contact_name, primary_contact_email, primary_contact_phone, address_line, city, state_code, notes, total_quoted, total_won, win_rate_pct, last_activity_at')
   .eq('shop_id', membership.shop_id)
   .order('last_activity_at', { ascending: false, nullsFirst: false });
 
+// Per-client rollups + recent quotes. One round-trip — we pull every
+// quote for the shop and bucket client-side, since shop quote counts
+// are small (<100 in practice). If this gets hot we'll add a per-client
+// /api/clients/:id endpoint and lazy-fetch on detail open.
+const { data: shopQuotes } = await svc
+  .from('quotes')
+  .select('id, ref, state, total, client_id, project_title, created_at')
+  .eq('shop_id', membership.shop_id)
+  .order('created_at', { ascending: false });
+
+const quotesByClient = new Map<string, NonNullable<typeof shopQuotes>>();
+for (const q of shopQuotes ?? []) {
+  if (!quotesByClient.has(q.client_id)) quotesByClient.set(q.client_id, []);
+  quotesByClient.get(q.client_id)!.push(q);
+}
+
+const clients: ClientRow[] = (rawClients ?? []).map((c) => {
+  const qs = quotesByClient.get(c.id) ?? [];
+  const n_jobs = qs.filter((q) => q.state === 'WON').length;       // a won quote → at least one job
+  const n_won = qs.filter((q) => q.state === 'WON').length;
+  const n_lost = qs.filter((q) => q.state === 'LOST').length;
+  return {
+    ...c,
+    total_quoted: Number(c.total_quoted ?? 0),
+    total_won: Number(c.total_won ?? 0),
+    win_rate_pct: c.win_rate_pct == null ? null : Number(c.win_rate_pct),
+    n_jobs,
+    n_won,
+    n_lost,
+    recent_quotes: qs.slice(0, 5).map((q) => ({
+      id: q.id,
+      ref: q.ref,
+      state: q.state as ClientRow['recent_quotes'][number]['state'],
+      project_title: q.project_title,
+      total: Number(q.total ?? 0),
+    })),
+  };
+});
+
+// Shop avg win rate — used in the "vs. X% shop avg" footnote.
+const decided = (shopQuotes ?? []).filter((q) => q.state === 'WON' || q.state === 'LOST');
+const won = decided.filter((q) => q.state === 'WON');
+const shopAvgWinRate = decided.length >= 3 ? (won.length / decided.length) * 100 : null;
+
 const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
 const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
-const rows = clients ?? [];
 ---
 
 <Brief
@@ -46,75 +87,34 @@ const rows = clients ?? [];
   <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1">
     Client book
   </div>
-  <h1 class="font-serif text-[28px] font-medium leading-tight">
+  <h1 class="font-serif text-[28px] font-medium leading-tight tracking-tight">
     People you bid for.
   </h1>
 
-  {rows.length === 0 ? (
-    <div class="mt-12 mx-auto max-w-[480px] text-center px-6">
-      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
-        Cold start
+  {clients.length === 0 ? (
+    <article class="mt-8 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 sm:p-14 max-w-[760px]">
+      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-3">
+        Clients · Cold start
       </div>
-      <h2 class="font-serif text-[24px] font-medium leading-tight">
-        Clients are added automatically.
+      <h2 class="font-serif text-[32px] sm:text-[40px] font-medium leading-tight">
+        Clients show up here on their own.
       </h2>
-      <p class="mt-3 text-sm text-[color:var(--color-muted)] leading-relaxed">
-        The first quote you send creates the first client. You don't have to enter anyone manually unless you want to.
+      <p class="mt-4 text-[15px] text-[color:var(--color-ink-2)] leading-relaxed font-serif max-w-[55ch]">
+        Brief adds a client the first time you quote them. You don't have to type anyone in by hand. Once you've sent a few quotes the win rate, lifetime value, and recent activity fill in automatically.
       </p>
-      <div class="mt-6">
+      <div class="mt-7">
         <a
           href="/generate"
-          class="inline-flex items-center px-4 py-2 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-sm font-medium hover:brightness-95"
+          class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-sm font-medium hover:brightness-95"
         >
-          Produce your first quote →
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" /></svg>
+          Produce your first quote
         </a>
       </div>
-    </div>
+    </article>
   ) : (
-    <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
-      <table class="w-full">
-        <thead class="bg-[color:var(--color-surface-2)]">
-          <tr>
-            <th class="px-3.5 py-3 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Client</th>
-            <th class="px-3.5 py-3 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Type</th>
-            <th class="px-3.5 py-3 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Quoted</th>
-            <th class="px-3.5 py-3 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Won</th>
-            <th class="px-3.5 py-3 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Win rate</th>
-            <th class="px-3.5 py-3 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Last activity</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((c) => (
-            <tr class="border-t border-[color:var(--color-line)] hover:bg-[color:var(--color-surface-2)]">
-              <td class="px-3.5 py-3 text-sm">
-                <div class="font-medium">{c.name}</div>
-                {c.primary_contact_name && (
-                  <div class="text-xs text-[color:var(--color-muted)] mt-0.5">{c.primary_contact_name}</div>
-                )}
-              </td>
-              <td class="px-3.5 py-3">
-                {c.type && (
-                  <Pill tone="neutral" dot={false} size="sm">
-                    {c.type === 'gc' ? 'GC' : c.type.charAt(0).toUpperCase() + c.type.slice(1)}
-                  </Pill>
-                )}
-              </td>
-              <td class="px-3.5 py-3 text-right text-sm font-mono tabular-nums">
-                {fmtCurrencyCompact(Number(c.total_quoted ?? 0))}
-              </td>
-              <td class="px-3.5 py-3 text-right text-sm font-mono tabular-nums">
-                {fmtCurrencyCompact(Number(c.total_won ?? 0))}
-              </td>
-              <td class="px-3.5 py-3 text-right text-sm font-mono tabular-nums">
-                {c.win_rate_pct != null ? `${Number(c.win_rate_pct).toFixed(0)}%` : '—'}
-              </td>
-              <td class="px-3.5 py-3 text-right text-xs text-[color:var(--color-muted)] font-mono">
-                {fmtRelativeDate(c.last_activity_at)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div class="mt-6">
+      <ClientsView client:load clients={clients} shop_avg_win_rate={shopAvgWinRate} />
     </div>
   )}
 </Brief>
