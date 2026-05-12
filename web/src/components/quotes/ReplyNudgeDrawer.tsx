@@ -37,6 +37,7 @@ export default function ReplyNudgeDrawer(props: Props) {
   const [streaming, setStreaming] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [sending, setSending] = createSignal(false);
+  const [channel, setChannel] = createSignal<'email' | 'sms'>('email');
   let abortController: AbortController | null = null;
   let userTouched = false;
 
@@ -123,13 +124,18 @@ export default function ReplyNudgeDrawer(props: Props) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           quote_id: props.quote.id,
-          channel: 'email',
+          channel: channel(),
           subject: subject(),
           body: body(),
           drafted_by: userTouched ? 'user' : 'brief',
         }),
       });
       if (!resp.ok) throw new Error(await resp.text());
+      const data = (await resp.json()) as { delivery_error?: string | null };
+      if (data.delivery_error) {
+        setError(`Recorded, but ${channel().toUpperCase()} delivery failed: ${data.delivery_error}`);
+        return;
+      }
       props.onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -174,9 +180,12 @@ export default function ReplyNudgeDrawer(props: Props) {
         )}
       </Show>
 
-      <Field label="Subject">
-        <Input value={subject()} onInput={(e) => setSubject(e.currentTarget.value)} />
-      </Field>
+      <ChannelPicker channel={channel} setChannel={setChannel} />
+      <Show when={channel() === 'email'}>
+        <Field label="Subject">
+          <Input value={subject()} onInput={(e) => setSubject(e.currentTarget.value)} />
+        </Field>
+      </Show>
       <div class="mt-4">
         <div class="flex items-center gap-2 mb-1.5">
           <span class="text-[11.5px] font-medium text-[color:var(--color-muted)] uppercase tracking-[0.06em] font-mono">
@@ -320,4 +329,67 @@ function nextWeekdayMorning(from: Date): Date {
   if (x <= from) x.setDate(x.getDate() + 1);
   while (x.getDay() === 0 || x.getDay() === 6) x.setDate(x.getDate() + 1);
   return x;
+}
+
+/** Email / SMS segmented control. SMS branch hides the subject field
+ * upstream because Twilio doesn't carry subjects, and warns about
+ * Twilio's 160-char-per-segment cost model so the operator knows long
+ * bodies will fan out across segments.
+ */
+export function ChannelPicker(p: {
+  channel: () => 'email' | 'sms';
+  setChannel: (c: 'email' | 'sms') => void;
+}) {
+  return (
+    <div class="mb-4">
+      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-1.5">
+        Channel
+      </div>
+      <div
+        role="tablist"
+        class="inline-flex rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] p-0.5"
+      >
+        {(['email', 'sms'] as const).map((c) => {
+          const active = () => p.channel() === c;
+          return (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={active()}
+              onClick={() => p.setChannel(c)}
+              class={[
+                'px-3 py-1.5 text-xs font-medium uppercase tracking-[0.04em] font-mono rounded-md transition-colors',
+                active()
+                  ? 'bg-[color:var(--color-surface)] text-[color:var(--color-ink)] shadow-sm'
+                  : 'text-[color:var(--color-muted)] hover:text-[color:var(--color-ink-2)]',
+              ].join(' ')}
+            >
+              <span class="inline-flex items-center gap-1.5">
+                <Show
+                  when={c === 'email'}
+                  fallback={
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="2" y="1.5" width="8" height="9" rx="1.5" />
+                      <path d="M5 8.5h2" stroke-linecap="round" />
+                    </svg>
+                  }
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <rect x="1.5" y="2.5" width="9" height="7" rx="1" />
+                    <path d="M1.5 3.5l4.5 3 4.5-3" />
+                  </svg>
+                </Show>
+                {c === 'email' ? 'Email' : 'SMS'}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <Show when={p.channel() === 'sms'}>
+        <p class="mt-1.5 text-[11.5px] italic font-serif text-[color:var(--color-muted)]">
+          Texts longer than ~160 chars get split into multiple SMS segments — keep it tight.
+        </p>
+      </Show>
+    </div>
+  );
 }
