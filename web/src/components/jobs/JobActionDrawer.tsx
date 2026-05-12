@@ -14,6 +14,7 @@ import SlideOver from '@/components/ui/SlideOver';
 import Button from '@/components/ui/Button';
 import Field, { Input } from '@/components/ui/Field';
 import Pill from '@/components/ui/Pill';
+import { ChannelPicker } from '@/components/quotes/ReplyNudgeDrawer';
 
 export type JobActionMode = 'update' | 'check-in';
 
@@ -41,6 +42,7 @@ export default function JobActionDrawer(props: Props) {
   const [streaming, setStreaming] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [sending, setSending] = createSignal(false);
+  const [channel, setChannel] = createSignal<'email' | 'sms'>('email');
   let abortController: AbortController | null = null;
   let userTouched = false;
 
@@ -126,12 +128,18 @@ export default function JobActionDrawer(props: Props) {
         body: JSON.stringify({
           job_id: props.job.id,
           kind: props.mode === 'check-in' ? 'check-in' : 'update',
+          channel: channel(),
           subject: subject(),
           body: body(),
           drafted_by: userTouched ? 'user' : 'brief',
         }),
       });
       if (!resp.ok) throw new Error(await resp.text());
+      const data = (await resp.json()) as { delivery_error?: string | null };
+      if (data.delivery_error) {
+        setError(`Recorded, but ${channel().toUpperCase()} delivery failed: ${data.delivery_error}`);
+        return;
+      }
       props.onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -165,9 +173,12 @@ export default function JobActionDrawer(props: Props) {
         </>
       }
     >
-      <Field label="Subject">
-        <Input value={subject()} onInput={(e) => setSubject(e.currentTarget.value)} />
-      </Field>
+      <ChannelPicker channel={channel} setChannel={setChannel} />
+      <Show when={channel() === 'email'}>
+        <Field label="Subject">
+          <Input value={subject()} onInput={(e) => setSubject(e.currentTarget.value)} />
+        </Field>
+      </Show>
       <div class="mt-4">
         <div class="flex items-center gap-2 mb-1.5">
           <span class="text-[11.5px] font-medium text-[color:var(--color-muted)] uppercase tracking-[0.06em] font-mono">
