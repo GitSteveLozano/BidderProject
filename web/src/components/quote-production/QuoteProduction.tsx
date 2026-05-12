@@ -552,6 +552,15 @@ function ScopeStep(p: {
         </div>
       </Show>
 
+      {/* Narrative task list — gives the operator a sense of what
+          Brief is actually doing while the SSE stream fills line
+          items. Tasks animate to "done" as scan progress crosses
+          their thresholds. Stays visible until 100% AND we have
+          line items; then collapses to make room. */}
+      <Show when={!p.error() && (p.progress() < 100 || p.lineItems().length === 0)}>
+        <ScanTaskList progress={p.progress} lineItemCount={() => p.lineItems().length} />
+      </Show>
+
       <Show when={p.flags().length > 0}>
         <div class="mt-6 space-y-2">
           <For each={p.flags()}>
@@ -853,4 +862,78 @@ function SentStep(p: {
 function round(n: number, decimals: number): number {
   const m = Math.pow(10, decimals);
   return Math.round(n * m) / m;
+}
+
+/**
+ * <ScanTaskList> — narrative of what Brief is doing while the SSE
+ * stream fills the line items. Tasks advance based on `progress`
+ * thresholds (which the scan endpoint emits in
+ * `{type:"progress",percent}` events). Active task gets a spinner +
+ * "reading..." right-aligned; completed tasks get a green checkmark;
+ * future tasks render at 40% opacity.
+ *
+ * Mirrors design/mockups/01-agenda-default.png. The thresholds
+ * intentionally finish a beat before 100% so by the time progress
+ * hits 100 every task is checked and the list can transition cleanly
+ * to the line items panel.
+ */
+function ScanTaskList(p: {
+  progress: () => number;
+  lineItemCount: () => number;
+}) {
+  const tasks = [
+    { at: 0,  label: 'Reading the scope text' },
+    { at: 18, label: 'Identifying project type' },
+    { at: 38, label: 'Pulling matching past jobs' },
+    { at: 58, label: 'Estimating quantities' },
+    { at: 78, label: 'Composing line items + crew estimate' },
+    { at: 92, label: 'Cross-checking against your typical margins' },
+  ];
+  return (
+    <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] px-5 py-4">
+      <ul class="space-y-2.5">
+        <For each={tasks}>
+          {(t, i) => {
+            const next = tasks[i() + 1];
+            const done = () => p.progress() >= (next ? next.at : 100);
+            const active = () => !done() && p.progress() >= t.at;
+            const future = () => p.progress() < t.at;
+            return (
+              <li
+                class={[
+                  'flex items-center gap-3 text-[14px] transition-opacity duration-200',
+                  future() ? 'opacity-40' : '',
+                ].join(' ')}
+              >
+                <span class="w-4 h-4 grid place-items-center shrink-0" aria-hidden="true">
+                  <Show when={done()} fallback={
+                    <Show when={active()} fallback={
+                      <span class="w-2.5 h-2.5 rounded-full border border-[color:var(--color-line-2)]" />
+                    }>
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="animate-spin text-[color:var(--color-accent)]">
+                        <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 10" />
+                      </svg>
+                    </Show>
+                  }>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="text-[color:var(--color-good)]">
+                      <path d="M2.5 7l3 3 6-6.5" />
+                    </svg>
+                  </Show>
+                </span>
+                <span class="flex-1">{t.label}</span>
+                <Show when={active()}>
+                  <span class="text-[11px] font-mono italic text-[color:var(--color-muted-2)]">reading…</span>
+                </Show>
+                <Show when={done() && t.label === 'Composing line items + crew estimate' && p.lineItemCount() > 0}>
+                  <span class="text-[11px] font-mono tabular-nums text-[color:var(--color-muted)]">
+                    {p.lineItemCount()} so far
+                  </span>
+                </Show>
+              </li>
+            );
+          }}
+        </For>
+      </ul>
+    </div>
+  );
 }
