@@ -88,7 +88,7 @@ export default function JobsView(props: Props) {
       </Show>
 
       <Show when={props.jobs.length > 0}>
-        <div class="grid grid-cols-[320px_1fr] gap-6">
+        <div class="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-6">
           <nav aria-label="Jobs">
             <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
               <For each={props.jobs}>
@@ -299,7 +299,8 @@ function Detail(p: {
             Auto-synced from payroll & receipts
           </span>
         </div>
-        <table class="w-full">
+        <div class="overflow-x-auto">
+        <table class="w-full min-w-[680px]">
           <thead class="bg-[color:var(--color-surface-2)]">
             <tr>
               <th class="px-4 py-2.5 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Line</th>
@@ -360,6 +361,7 @@ function Detail(p: {
             </For>
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
