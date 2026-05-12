@@ -1,0 +1,54 @@
+---
+import Brief from '@/layouts/Brief.astro';
+import JobsView from '@/components/jobs/JobsView';
+import { client as supabaseService } from '@/lib/supabase';
+
+export const prerender = false;
+Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
+Astro.response.headers.set('cdn-cache-control', 'no-store');
+
+const env = Astro.locals.runtime?.env;
+const user = Astro.locals.user;
+const membership = Astro.locals.membership;
+if (!user || !membership || !env) {
+  return Astro.redirect('/auth/signin?next=/jobs');
+}
+
+const svc = supabaseService(env, 'service');
+const { data: shop } = await svc
+  .from('shops')
+  .select('legal_name, trade_name, owner_name, data_state')
+  .eq('id', membership.shop_id)
+  .maybeSingle();
+
+const { data: jobs } = await svc
+  .from('jobs')
+  .select('*')
+  .eq('shop_id', membership.shop_id)
+  .order('created_at', { ascending: false });
+
+const normalized = (jobs ?? []).map((j) => ({
+  ...j,
+  estimated_total: Number(j.estimated_total ?? 0),
+  actual_total: Number(j.actual_total ?? 0),
+  variance: Number(j.variance ?? 0),
+  variance_pct: j.variance_pct == null ? null : Number(j.variance_pct),
+}));
+
+const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
+const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
+const liveJobs = normalized.filter((j) => j.state === 'INPROGRESS' || j.state === 'SCHEDULED').length;
+---
+
+<Brief
+  title="Jobs"
+  active="jobs"
+  shopLabel={shopLabel}
+  shopInitial={shopLabel.charAt(0).toUpperCase()}
+  ownerFirst={ownerFirst}
+  ownerRole={membership.role.charAt(0).toUpperCase() + membership.role.slice(1)}
+  dataState={shop?.data_state ?? 'cold-start'}
+  liveJobs={liveJobs}
+>
+  <JobsView client:load jobs={normalized} />
+</Brief>
