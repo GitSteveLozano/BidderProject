@@ -1,0 +1,213 @@
+---
+/**
+ * Brief — chromed layout (sidebar + topbar). Used by every authed
+ * page; landing/auth/onboarding use BareLayout.
+ *
+ * Sidebar matches design/snapshots/dashboard.jsx + the mockups under
+ * design/mockups/. Calibration footer renders the current data_state
+ * ("Cold start", "Calibrating", "Calibrated") — passed in from the
+ * .astro page that loads the shop.
+ */
+import '@/styles/tokens.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+  /** Active nav item — drives the sidebar highlight + topbar crumb. */
+  active?: 'dashboard' | 'quotes' | 'jobs' | 'clients' | 'settings' | 'newquote' | 'quotedetail';
+  /** Shop label rendered in the topbar crumb. */
+  shopLabel?: string;
+  /** Shop avatar initial + owner role for the sidebar shop chip. */
+  shopInitial?: string;
+  ownerFirst?: string;
+  ownerRole?: string;
+  /** Calibration footer state. */
+  dataState?: 'cold-start' | 'calibrating' | 'calibrated';
+  calibrationSub?: string;
+  /** Badge counts on the active-quotes / live-jobs nav items. */
+  activeQuotes?: number;
+  liveJobs?: number;
+}
+
+const {
+  title = 'Brief',
+  description = 'Bid production and pipeline operations for finishing-trade contractors.',
+  active = 'dashboard',
+  shopLabel = 'L·A Stucco',
+  shopInitial = 'L',
+  ownerFirst = 'Cavy',
+  ownerRole = 'Owner',
+  dataState = 'calibrated',
+  calibrationSub,
+  activeQuotes,
+  liveJobs,
+} = Astro.props;
+
+const CRUMB: Record<NonNullable<Props['active']>, string> = {
+  dashboard: 'Dashboard',
+  quotes: 'Quotes',
+  jobs: 'Jobs',
+  clients: 'Clients',
+  settings: 'Settings',
+  newquote: 'New quote',
+  quotedetail: 'Quote',
+};
+
+const CALIB: Record<NonNullable<Props['dataState']>, { label: string; sub: string }> = {
+  'cold-start':  { label: 'New', sub: '0 sent so far' },
+  calibrating:   { label: 'Calibrating', sub: 'Brief is still learning your voice' },
+  calibrated:    { label: 'Calibrated', sub: 'learned from 30+ quotes' },
+};
+
+const calib = CALIB[dataState];
+const calibSub = calibrationSub ?? calib.sub;
+
+const navClass = (key: Props['active']) =>
+  `flex items-center gap-2.5 px-2.5 py-[7px] rounded-md text-[13px] transition-colors ` +
+  (active === key
+    ? 'bg-[color:var(--color-surface)] text-[color:var(--color-ink)] font-medium shadow-[var(--shadow-sm)]'
+    : 'text-[color:var(--color-ink-2)] hover:bg-[color:var(--color-surface)]');
+---
+
+<!doctype html>
+<html lang="en" class="h-full" data-theme="paper">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title} · Brief</title>
+    <meta name="description" content={description} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body
+    class="min-h-full bg-[color:var(--color-bg)] text-[color:var(--color-ink)] font-sans"
+  >
+    <div class="grid grid-cols-[252px_1fr] h-screen">
+      <!-- Sidebar -->
+      <aside
+        class="bg-[color:var(--color-bg-2)] border-r border-[color:var(--color-line)] p-4 flex flex-col gap-3 min-h-0"
+      >
+        <div class="flex items-center gap-2.5 px-1 pb-3">
+          <div
+            class="w-7 h-7 rounded-md bg-[color:var(--color-ink)] text-[color:var(--color-bg)] flex items-center justify-center font-serif italic font-semibold text-[16px] leading-none"
+          >
+            B
+          </div>
+          <div class="font-serif text-[20px] font-medium leading-none tracking-tight">
+            Brief
+          </div>
+        </div>
+
+        <div
+          class="flex items-center gap-2.5 p-2.5 rounded-lg bg-[color:var(--color-surface)] border border-[color:var(--color-line)]"
+        >
+          <div
+            class="w-8 h-8 rounded-md bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] grid place-items-center font-serif font-semibold text-[16px]"
+          >
+            {shopInitial}
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="font-medium text-[13px] truncate">{shopLabel}</div>
+            <div class="text-[11px] text-[color:var(--color-muted)] mt-px">
+              {ownerFirst} · {ownerRole}
+            </div>
+          </div>
+        </div>
+
+        <a
+          href="/generate"
+          class="inline-flex items-center justify-center gap-[7px] w-full px-3 py-2.5 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] font-medium text-[13px] hover:brightness-95"
+        >
+          <span aria-hidden="true">+</span> New quote
+        </a>
+
+        <nav class="flex flex-col gap-px mt-2">
+          <a href="/dashboard" class={navClass('dashboard')}>
+            <span aria-hidden="true">▣</span>
+            <span>Dashboard</span>
+          </a>
+          <a href="/quotes" class={navClass('quotes')}>
+            <span aria-hidden="true">📄</span>
+            <span>Quotes</span>
+            {activeQuotes !== undefined && activeQuotes > 0 && (
+              <span class="ml-auto font-mono text-[11px] bg-[color:var(--color-line-2)] text-[color:var(--color-ink-2)] px-1.5 rounded">
+                {activeQuotes}
+              </span>
+            )}
+          </a>
+          <a href="/jobs" class={navClass('jobs')}>
+            <span aria-hidden="true">⌂</span>
+            <span>Jobs</span>
+            {liveJobs !== undefined && liveJobs > 0 && (
+              <span class="ml-auto font-mono text-[11px] bg-[color:var(--color-line-2)] text-[color:var(--color-ink-2)] px-1.5 rounded">
+                {liveJobs}
+              </span>
+            )}
+          </a>
+          <a href="/clients" class={navClass('clients')}>
+            <span aria-hidden="true">◔</span>
+            <span>Clients</span>
+          </a>
+        </nav>
+
+        <div class="text-eyebrow font-mono text-[color:var(--color-muted-2)] px-2.5 pt-3 pb-1 font-medium">
+          Account
+        </div>
+        <nav class="flex flex-col gap-px">
+          <a href="/settings" class={navClass('settings')}>
+            <span aria-hidden="true">⚙</span>
+            <span>Settings</span>
+          </a>
+        </nav>
+
+        <div
+          class="mt-auto pt-3.5 border-t border-[color:var(--color-line)]"
+        >
+          <div class="font-medium text-[13px]">{calib.label}</div>
+          <div class="text-[12px] text-[color:var(--color-muted)] mt-0.5 leading-snug">
+            {calibSub}
+          </div>
+          <div class="text-[11px] font-mono text-[color:var(--color-muted-2)] mt-3 leading-snug">
+            Brief proposes; you decide.
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main column -->
+      <div class="flex flex-col min-w-0 overflow-hidden">
+        <div
+          class="flex items-center gap-3.5 px-10 py-3.5 border-b border-[color:var(--color-line)] bg-[color:var(--color-bg)]"
+        >
+          <div class="flex items-center gap-2 text-[13px] text-[color:var(--color-muted)]">
+            <span>{shopLabel}</span>
+            <span class="text-[color:var(--color-muted-2)]">/</span>
+            <span class="text-[color:var(--color-ink)] font-medium">{CRUMB[active]}</span>
+          </div>
+          <div class="flex-1" />
+          <div
+            class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[color:var(--color-surface)] border border-[color:var(--color-line)] w-[320px]"
+          >
+            <span class="text-[color:var(--color-muted)]" aria-hidden="true">⌕</span>
+            <input
+              type="search"
+              placeholder="Search quotes, clients, jobs…"
+              class="flex-1 bg-transparent border-0 outline-none text-[13px]"
+              aria-label="Search"
+            />
+            <span class="font-mono text-[11px] text-[color:var(--color-muted-2)] border border-[color:var(--color-line)] rounded px-1">⌘K</span>
+          </div>
+        </div>
+
+        <main class="flex-1 overflow-auto px-10 py-7">
+          <slot />
+        </main>
+      </div>
+    </div>
+  </body>
+</html>
+
+<style is:global>
+  @keyframes slide-in-right {
+    from { transform: translateX(8%); opacity: 0; }
+    to   { transform: translateX(0);  opacity: 1; }
+  }
+</style>

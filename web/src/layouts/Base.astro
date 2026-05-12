@@ -1,46 +1,59 @@
 ---
+/**
+ * Base — bare layout for routes that don't get the Brief chrome
+ * (landing, auth, onboarding, error pages). The Brief.astro layout
+ * is used for everything else.
+ *
+ * Existing /bids, /jcr, /insights, /generate, /postmortem pages
+ * still wear this Base layout. They get migrated to Brief.astro in
+ * their respective redesign PRs (4-6).
+ */
+import '@/styles/tokens.css';
+
 interface Props {
   title?: string;
   description?: string;
 }
 
 const {
-  title = 'ProService Bid Intelligence',
-  description = 'Multi-agent AI platform for SMB specialty contractors',
+  title = 'Brief',
+  description = 'Bid production and pipeline operations for finishing-trade contractors.',
 } = Astro.props;
 ---
 
 <!doctype html>
-<html lang="en" class="h-full">
+<html lang="en" class="h-full" data-theme="paper">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title}</title>
+    <title>{title} · Brief</title>
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
-  <body class="min-h-full bg-ink-50 text-ink-900 antialiased font-sans">
-    <header class="border-b border-ink-200 bg-white">
+  <body
+    class="min-h-full bg-[color:var(--color-bg)] text-[color:var(--color-ink)] font-sans antialiased"
+  >
+    <header class="border-b border-[color:var(--color-line)] bg-[color:var(--color-surface)]">
       <div class="mx-auto max-w-7xl px-4 py-4 flex items-center justify-between">
-        <a href="/" class="flex items-center gap-2">
-          <span class="text-lg font-semibold tracking-tight">
-            ProService Bid Intelligence
+        <a href="/" class="flex items-center gap-2.5">
+          <div
+            class="w-7 h-7 rounded-md bg-[color:var(--color-ink)] text-[color:var(--color-bg)] grid place-items-center font-serif italic font-semibold text-[16px] leading-none"
+          >B</div>
+          <span class="font-serif text-[20px] font-medium leading-none tracking-tight">
+            Brief
           </span>
         </a>
-        <nav class="flex items-center gap-5 text-sm">
-          <a href="/generate" class="hover:text-accent-600">Generate</a>
-          <a href="/bids" class="hover:text-accent-600">Bids</a>
-          <a href="/jcr" class="hover:text-accent-600">JCR</a>
-          <a href="/postmortem" class="hover:text-accent-600">Postmortem</a>
-          <a href="/insights" class="hover:text-accent-600">Insights</a>
+        <nav class="flex items-center gap-5 text-[13px]">
+          <a href="/generate" class="hover:text-[color:var(--color-accent)]">Generate</a>
+          <a href="/bids" class="hover:text-[color:var(--color-accent)]">Quotes</a>
+          <a href="/jcr" class="hover:text-[color:var(--color-accent)]">Jobs</a>
+          <a href="/insights" class="hover:text-[color:var(--color-accent)]">Dashboard</a>
           <a
             href="https://github.com/GitSteveLozano/BidderProject"
             target="_blank"
             rel="noopener"
-            class="text-ink-500 hover:text-ink-700"
-          >
-            GitHub
-          </a>
+            class="text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)]"
+          >GitHub</a>
         </nav>
       </div>
     </header>
@@ -49,27 +62,20 @@ const {
       <slot />
     </main>
 
-    <footer class="border-t border-ink-200 mt-16">
-      <div class="mx-auto max-w-7xl px-4 py-6 text-sm text-ink-500 flex flex-wrap justify-between gap-2">
-        <span>
-          Built on Astro + Cloudflare Pages. Open source —
-          <a
-            href="https://github.com/GitSteveLozano/BidderProject"
-            class="underline hover:text-ink-700"
-          >
-            source on GitHub
-          </a>.
-        </span>
-        <span>
-          <code class="text-xs bg-ink-100 px-2 py-1 rounded">
-            claude-sonnet-4-6
-          </code>
-          {' '}+{' '}
-          <code class="text-xs bg-ink-100 px-2 py-1 rounded">
-            claude-haiku-4-5
-          </code>
-        </span>
+    <footer class="border-t border-[color:var(--color-line)] mt-16">
+      <div
+        class="mx-auto max-w-7xl px-4 py-6 text-[13px] text-[color:var(--color-muted)] flex flex-wrap justify-between gap-2"
+      >
+        <span class="font-mono">Brief proposes; you decide.</span>
+        <span class="font-mono text-[color:var(--color-muted-2)]">v1.0</span>
       </div>
     </footer>
+
+    <style is:global>
+      @keyframes slide-in-right {
+        from { transform: translateX(8%); opacity: 0; }
+        to   { transform: translateX(0);  opacity: 1; }
+      }
+    </style>
   </body>
 </html>
