@@ -669,6 +669,16 @@ function VoiceIntake(p: {
   };
 
   const start = async () => {
+    // eslint-disable-next-line no-console
+    console.log('[VoiceIntake] start clicked', { state: state(), hasMR: !!mediaRecorder });
+    if (state() === 'recording') {
+      // Defensive — if the button reads as "start" but we're somehow
+      // still in recording state, treat as a stop instead.
+      // eslint-disable-next-line no-console
+      console.warn('[VoiceIntake] start clicked while recording — routing to stop');
+      stop();
+      return;
+    }
     setError(null);
     setInfo(null);
     setRecordedSeconds(null);
@@ -681,10 +691,6 @@ function VoiceIntake(p: {
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       chunks = [];
-      // Don't force a mimeType — Workers AI Whisper handles webm/opus
-      // inconsistently. Letting the browser pick its default produces
-      // a more compatible output, and the server-side transcribe path
-      // tolerates whatever lands.
       mediaRecorder = new MediaRecorder(mediaStream);
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
@@ -700,7 +706,7 @@ function VoiceIntake(p: {
         try {
           const mime = mediaRecorder?.mimeType || 'audio/webm';
           // eslint-disable-next-line no-console
-          console.log('[VoiceIntake] onstop', { chunks: chunks.length, mime });
+          console.log('[VoiceIntake] onstop fired', { chunkCount: chunks.length, mime });
           if (chunks.length === 0) {
             setError('Recording stopped before any audio data was captured. Try again — record for at least a second or two.');
             setState('idle');
@@ -708,6 +714,8 @@ function VoiceIntake(p: {
             return;
           }
           const blob = new Blob(chunks, { type: mime });
+          // eslint-disable-next-line no-console
+          console.log('[VoiceIntake] blob built', { size: blob.size, type: blob.type });
           cleanup();
           await transcribe(blob);
         } catch (err) {
@@ -715,45 +723,61 @@ function VoiceIntake(p: {
           console.error('[VoiceIntake] onstop failure', err);
           setError(`Audio processing failed: ${err instanceof Error ? err.message : String(err)}`);
           setState('idle');
+          cleanup();
         }
       };
-      // 250 ms timeslice so chunks accumulate during the recording
-      // instead of only when stop() fires. If onstop is delayed for any
-      // reason we still have buffered data.
       mediaRecorder.start(250);
+      // eslint-disable-next-line no-console
+      console.log('[VoiceIntake] recorder started', { state: mediaRecorder.state, mime: mediaRecorder.mimeType });
       setState('recording');
       setElapsed(0);
       timer = window.setInterval(() => setElapsed(elapsed() + 1), 1000);
     } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[VoiceIntake] start failure', err);
       setError(`Mic access failed: ${err instanceof Error ? err.message : String(err)}`);
       cleanup();
     }
   };
 
   const stop = () => {
+    // eslint-disable-next-line no-console
+    console.log('[VoiceIntake] stop clicked', {
+      state: state(),
+      mrState: mediaRecorder?.state,
+      hasMR: !!mediaRecorder,
+      hasStream: !!mediaStream,
+    });
     setRecordedSeconds(elapsed());
     if (timer != null) { clearInterval(timer); timer = null; }
     if (!mediaRecorder) {
       setError('Recorder isn\'t initialized — try starting again.');
       setState('idle');
+      cleanup();
       return;
     }
     if (mediaRecorder.state === 'inactive') {
       setError('Recorder was already stopped. If you saw this immediately after pressing record, the mic stream ended early.');
       setState('idle');
+      cleanup();
       return;
     }
     try {
-      // Force a final dataavailable before stopping so we don't lose
-      // the trailing buffer.
       if (typeof mediaRecorder.requestData === 'function') {
         try { mediaRecorder.requestData(); } catch {}
       }
       mediaRecorder.stop();
       setState('uploading');
+      // eslint-disable-next-line no-console
+      console.log('[VoiceIntake] stop() called, awaiting onstop');
     } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[VoiceIntake] stop() threw', err);
       setError(`Couldn't stop the recorder: ${err instanceof Error ? err.message : String(err)}`);
       setState('idle');
+      // Critical: kill the stream so the mic indicator goes off and
+      // the operator sees that pressing stop did something.
+      cleanup();
     }
   };
 
@@ -898,29 +922,36 @@ function VoiceIntake(p: {
         </Show>
       </div>
       <Show when={error()}>
-        <div class="mt-2 text-xs text-[color:var(--color-danger)]">{error()}</div>
+        <div class="mt-2 text-xs text-[color:var(--color-danger)] leading-relaxed">{error()}</div>
       </Show>
-      {/* Fallback for browsers/setups where in-page recording is
-          flaky. The operator records on their phone or another tool
-          and drops the file here — same Whisper transcribe path. */}
+
+      {/* File-upload alternative. Same Whisper path, no MediaRecorder.
+          Discoverable as a peer option so operators with flaky mic
+          setups can use this without hunting through an accordion. */}
       <Show when={state() === 'idle' || state() === 'done'}>
-        <details class="mt-3">
-          <summary class="text-xs text-[color:var(--color-muted)] cursor-pointer hover:text-[color:var(--color-ink)]">
-            Recording not working? Upload an audio file instead.
-          </summary>
-          <label class="block mt-2 rounded-lg border border-dashed border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] px-4 py-3 cursor-pointer hover:border-[color:var(--color-accent)] text-xs">
-            <input
-              type="file"
-              accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg"
-              class="sr-only"
-              onChange={(e) => {
-                const f = e.currentTarget.files?.[0];
-                if (f) handleAudioUpload(f);
-              }}
-            />
-            Drop an audio file (mp3, wav, m4a, webm) or click to choose.
-          </label>
-        </details>
+        <label class="mt-3 block rounded-xl border border-dashed border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] hover:border-[color:var(--color-accent)] px-5 py-4 cursor-pointer">
+          <input
+            type="file"
+            accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg"
+            class="sr-only"
+            onChange={(e) => {
+              const f = e.currentTarget.files?.[0];
+              if (f) handleAudioUpload(f);
+            }}
+          />
+          <div class="flex items-center gap-3">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" class="text-[color:var(--color-muted)]" aria-hidden="true">
+              <path d="M4 12v3.5a1 1 0 0 0 1 1h10a1 1 0 0 0 1 -1v-3.5" />
+              <path d="M10 4v8M7 7l3 -3 3 3" stroke-linecap="round" />
+            </svg>
+            <div class="flex-1 min-w-0">
+              <div class="text-sm font-medium">Or drop an audio file</div>
+              <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
+                Record on your phone, send it here. mp3, wav, m4a, webm, ogg.
+              </div>
+            </div>
+          </div>
+        </label>
       </Show>
     </div>
   );
