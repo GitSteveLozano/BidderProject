@@ -59,7 +59,7 @@ export default function ClientsView(props: Props) {
   const showDetail = createMemo(() => selected() !== null);
 
   return (
-    <div class={['grid gap-6 transition-[grid-template-columns] duration-200', showDetail() ? 'grid-cols-[1fr_360px]' : 'grid-cols-1'].join(' ')}>
+    <div class={['grid gap-6 transition-[grid-template-columns] duration-200', showDetail() ? 'grid-cols-1 lg:grid-cols-[1fr_360px]' : 'grid-cols-1'].join(' ')}>
       <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
         <table class="w-full">
           <thead class="bg-[color:var(--color-surface-2)]">

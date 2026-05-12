@@ -130,7 +130,8 @@ export default function LineItemsTable(props: Props) {
           </button>
         </Show>
       </div>
-      <table class="w-full">
+      <div class="overflow-x-auto">
+      <table class="w-full min-w-[640px]">
         <thead class="bg-[color:var(--color-surface-2)]">
           <tr>
             <th class="px-3.5 py-2.5 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Description</th>
@@ -303,6 +304,7 @@ export default function LineItemsTable(props: Props) {
           </tr>
         </tbody>
       </table>
+      </div>
       <Show when={error()}>
         <div class="px-5 py-2 text-xs text-[color:var(--color-danger)] bg-[color:var(--color-danger-tint)]">
           {error()}

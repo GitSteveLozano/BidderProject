@@ -56,6 +56,10 @@ const Stepper: Component<StepperProps> = (props) => {
                 <span
                   class={[
                     'font-mono text-[12px]',
+                    // Mobile: only show the active step's label;
+                    // desktop: show all. Saves horizontal space at
+                    // 5–7 steps without losing the active context.
+                    s() === 'active' ? 'inline' : 'hidden sm:inline',
                     s() === 'active' ? 'text-[color:var(--color-ink)] font-semibold' : '',
                     s() === 'done' ? 'text-[color:var(--color-muted)]' : '',
                     s() === 'future' ? 'text-[color:var(--color-muted-2)]' : '',
@@ -65,7 +69,7 @@ const Stepper: Component<StepperProps> = (props) => {
                 </span>
               </li>
               <Show when={i() < props.steps.length - 1}>
-                <span class="text-[color:var(--color-muted-2)]" aria-hidden="true">/</span>
+                <span class="text-[color:var(--color-muted-2)] hidden sm:inline" aria-hidden="true">/</span>
               </Show>
             </>
           );
