@@ -20,6 +20,11 @@ export interface CloudflareEnv {
   SUPABASE_SERVICE_KEY?: string;
   DEFAULT_MODEL_HAIKU?: string;
   DEFAULT_MODEL_SONNET?: string;
+  // Cloudflare Workers AI binding — used by /api/intake/transcribe
+  // and /api/intake/extract-pdf. Bound in the Pages dashboard.
+  AI?: {
+    run: (model: string, input: unknown) => Promise<unknown>;
+  };
 }
 
 export function client(
