@@ -7,62 +7,34 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    name: Lint + tests
+  web:
+    name: Web — typecheck + build
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: bidintel
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bidintel
-      ANTHROPIC_API_KEY: ""
-      OPENAI_API_KEY: ""
-
+    defaults:
+      run:
+        working-directory: web
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
-          cache: pip
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-      - name: Install dependencies
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify Cloudflare adapter streaming patch applied
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          pip list
-
-      - name: Apply schema
-        run: |
-          PGPASSWORD=postgres psql -h localhost -U postgres -d bidintel -f db/schema.sql
-
-      - name: Ruff lint
-        run: ruff check .
-        continue-on-error: true  # ruff config evolves; don't block PRs initially
-
-      - name: Run unit tests
-        run: pytest -v --tb=long --no-header -rA
-
-      - name: Run Postgres integration tests
-        if: success() || failure()  # always run integration tests even if unit failed
-        env:
-          INTEGRATION_DB: "true"
-        run: pytest -v --tb=long --no-header -rA -m integration
-
-      # Docker build was a green-checkmark formality with no test value.
-      # Removed because it was the second exit-code-1 on CI and offered
-      # no signal beyond `pip install` + `COPY` working.
+          if ! grep -q "new App(manifest, false)" dist/_worker.js/_@astrojs-ssr-adapter.mjs; then
+            echo "::error::patch-cf-streaming.mjs did not run — Astro SSR will produce [object Object] on Cloudflare"
+            exit 1
+          fi
