@@ -33,6 +33,10 @@ export interface CloudflareEnv {
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
   TWILIO_FROM_NUMBER?: string;        // e.g. "+18085551234"
+  // Shared secret for the future inbound-email webhook path. When an
+  // automated parser (Brevo, CF Email Routing) POSTs to
+  // /api/inbound/email it passes this in `x-brief-webhook-secret`.
+  INBOUND_WEBHOOK_SECRET?: string;
 }
 
 export function client(
