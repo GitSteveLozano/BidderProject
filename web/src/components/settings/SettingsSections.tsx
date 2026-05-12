@@ -8,6 +8,7 @@
  * perpetual "Loading…" — operators can't fix what they can't see.
  */
 import { createResource, createSignal, For, Show } from 'solid-js';
+import { isServer } from 'solid-js/web';
 import Button from '@/components/ui/Button';
 import { Card, CardHeader, CardBody, CardFooter } from '@/components/ui/Card';
 import Field, { Input } from '@/components/ui/Field';
@@ -58,7 +59,15 @@ const GROUP_LABELS: Record<string, string> = {
 };
 
 export default function SettingsSections(props: Props) {
-  const [shop, { mutate, refetch }] = createResource<Shop>(loadShop);
+  // Gate the fetch on a client-only source. Cloudflare Worker's fetch
+  // doesn't accept relative URLs, so calling fetch('/api/shops/me')
+  // during the SSR pass throws "Invalid URL" and the island never
+  // hydrates. The source function evaluates to false on the server
+  // (no fetch) and true on the client (fetch runs once).
+  const [shop, { mutate, refetch }] = createResource<Shop, boolean>(
+    () => !isServer,
+    loadShop,
+  );
   const [savingKey, setSavingKey] = createSignal<string | null>(null);
   const [errorKey, setErrorKey] = createSignal<string | null>(null);
 
@@ -533,14 +542,19 @@ function VoiceProfileSection(props: { id: string; shop: Shop; saving: boolean; o
 }
 
 function DeliveryStatusSection(props: { id: string }) {
-  const [report] = createResource(async () => {
-    const resp = await fetch('/api/health/delivery');
-    if (!resp.ok) throw new Error(`Health probe ${resp.status}`);
-    return resp.json() as Promise<{
-      brevo: { configured: boolean; ok: boolean; detail: string };
-      twilio: { configured: boolean; ok: boolean; detail: string };
-    }>;
-  });
+  // Client-only — same reason as loadShop above: CF Worker fetch can't
+  // resolve the relative URL during SSR.
+  const [report] = createResource(
+    () => !isServer,
+    async () => {
+      const resp = await fetch('/api/health/delivery');
+      if (!resp.ok) throw new Error(`Health probe ${resp.status}`);
+      return resp.json() as Promise<{
+        brevo: { configured: boolean; ok: boolean; detail: string };
+        twilio: { configured: boolean; ok: boolean; detail: string };
+      }>;
+    },
+  );
 
   const row = (
     name: string,
