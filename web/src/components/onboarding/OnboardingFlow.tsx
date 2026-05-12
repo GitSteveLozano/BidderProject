@@ -32,6 +32,22 @@ interface VoiceSignal {
   evidence?: string;
 }
 
+interface PublicMatch {
+  source: 'website' | 'cslb' | 'hi-dcca';
+  source_label: string;
+  legal_name?: string;
+  trade_name?: string;
+  license_number?: string;
+  license_classification?: string;
+  license_jurisdiction?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  website?: string;
+  evidence_url: string;
+  evidence_excerpt?: string;
+}
+
 interface ProfileForm {
   legal_name: string;
   trade_name: string;
@@ -80,6 +96,54 @@ export default function OnboardingFlow(props: Props) {
   const [calendarConnected, setCalendarConnected] = createSignal(props.calendarAlreadyConnected);
 
   const [finishing, setFinishing] = createSignal(false);
+
+  // Step 1 sub-flow: public-record lookup
+  const [lookupOpen, setLookupOpen] = createSignal(false);
+  const [lookupBusinessName, setLookupBusinessName] = createSignal('');
+  const [lookupState, setLookupState] = createSignal('CA');
+  const [lookupWebsiteUrl, setLookupWebsiteUrl] = createSignal('');
+  const [lookupBusy, setLookupBusy] = createSignal(false);
+  const [lookupTriggered, setLookupTriggered] = createSignal(false);
+  const [lookupMatches, setLookupMatches] = createSignal<PublicMatch[]>([]);
+  const [lookupError, setLookupError] = createSignal<string | null>(null);
+
+  const runLookup = async () => {
+    setLookupBusy(true);
+    setLookupError(null);
+    setLookupMatches([]);
+    setLookupTriggered(true);
+    try {
+      const resp = await fetch('/api/onboarding/public-lookup', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          business_name: lookupBusinessName().trim() || undefined,
+          state: lookupState().trim() || undefined,
+          website_url: lookupWebsiteUrl().trim() || undefined,
+        }),
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      const data = (await resp.json()) as { matches: PublicMatch[] };
+      setLookupMatches(data.matches ?? []);
+    } catch (err) {
+      setLookupError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLookupBusy(false);
+    }
+  };
+
+  const acceptMatch = (m: PublicMatch) => {
+    updateProfile({
+      legal_name: m.legal_name ?? profile().legal_name,
+      trade_name: m.trade_name ?? profile().trade_name,
+      license_number: m.license_number ?? profile().license_number,
+      license_jurisdiction:
+        m.license_jurisdiction ?? lookupState() ?? profile().license_jurisdiction,
+      license_classification: m.license_classification ?? profile().license_classification,
+    });
+    setLookupOpen(false);
+    next();
+  };
 
   const next = () => setStepIdx(Math.min(stepIdx() + 1, STEPS.length - 1));
   const back = () => setStepIdx(Math.max(stepIdx() - 1, 0));
@@ -171,50 +235,81 @@ export default function OnboardingFlow(props: Props) {
       <Show when={stepId() === 'welcome'}>
         {/* Editorial welcome card — matches design/mockups/07-calendar.png style. */}
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
-          <h2 class="font-serif text-[26px] font-medium leading-tight">
-            Want to save a few minutes?
-          </h2>
-          <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
-            If your business has a <em>public</em> record — a contractor license, a state registry, a professional board listing — Brief can read it and pre-fill your profile. Most businesses don't have one, and that's fine. You can fill the profile out yourself in about a minute.
-          </p>
-          <button
-            type="button"
-            onClick={next}
-            class="mt-6 w-full text-left rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] hover:bg-[color:var(--color-surface)] hover:border-[color:var(--color-line-strong)] px-5 py-4 transition-colors flex items-center gap-4"
+          <Show
+            when={!lookupOpen()}
+            fallback={
+              <PublicLookupPanel
+                businessName={lookupBusinessName}
+                setBusinessName={setLookupBusinessName}
+                state={lookupState}
+                setState={setLookupState}
+                websiteUrl={lookupWebsiteUrl}
+                setWebsiteUrl={setLookupWebsiteUrl}
+                busy={lookupBusy}
+                triggered={lookupTriggered}
+                matches={lookupMatches}
+                error={lookupError}
+                ownerName={props.ownerName}
+                onRun={runLookup}
+                onAccept={acceptMatch}
+                onCancel={() => {
+                  setLookupOpen(false);
+                  setLookupTriggered(false);
+                  setLookupMatches([]);
+                  setLookupError(null);
+                }}
+                onSkip={next}
+              />
+            }
           >
-            <div class="w-9 h-9 rounded-md bg-[color:var(--color-accent-tint)] text-[color:var(--color-accent)] grid place-items-center shrink-0">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
-                <circle cx="7" cy="7" r="4.5" />
-                <path d="M10.3 10.3l3.2 3.2" stroke-linecap="round" />
-              </svg>
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="font-medium text-[14px]">Look up a public record</div>
-              <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
-                Contractor license, state business registry, or similar. We'll show you what we found before saving anything.
+            <h2 class="font-serif text-[26px] font-medium leading-tight">
+              Want to save a few minutes?
+            </h2>
+            <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
+              If your business has a <em>public</em> record — a contractor license, a state registry, a professional board listing — Brief can read it and pre-fill your profile. Most businesses don't have one, and that's fine. You can fill the profile out yourself in about a minute.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setLookupBusinessName(profile().trade_name || profile().legal_name || props.ownerName);
+                setLookupOpen(true);
+              }}
+              class="mt-6 w-full text-left rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] hover:bg-[color:var(--color-surface)] hover:border-[color:var(--color-line-strong)] px-5 py-4 transition-colors flex items-center gap-4"
+            >
+              <div class="w-9 h-9 rounded-md bg-[color:var(--color-accent-tint)] text-[color:var(--color-accent)] grid place-items-center shrink-0">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <circle cx="7" cy="7" r="4.5" />
+                  <path d="M10.3 10.3l3.2 3.2" stroke-linecap="round" />
+                </svg>
               </div>
-            </div>
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="text-[color:var(--color-muted)]" aria-hidden="true"><path d="M5 3l4 4-4 4" /></svg>
-          </button>
-          <button
-            type="button"
-            onClick={next}
-            class="mt-3 w-full text-left rounded-lg border border-[color:var(--color-line-2)] hover:bg-[color:var(--color-surface-2)] hover:border-[color:var(--color-line-strong)] px-5 py-4 transition-colors flex items-center gap-4"
-          >
-            <div class="w-9 h-9 rounded-md bg-[color:var(--color-bg-2)] text-[color:var(--color-muted)] grid place-items-center shrink-0">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
-                <path d="M3 2.5h6l3.5 3.5v7.5a0.5 0.5 0 0 1 -0.5 0.5h-9a0.5 0.5 0 0 1 -0.5 -0.5v-11a0.5 0.5 0 0 1 0.5 -0.5z" />
-                <path d="M9 2.5v3.5h3.5" />
-              </svg>
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="font-medium text-[14px]">Skip and fill it in yourself</div>
-              <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
-                Takes about a minute. Six steps total — none of them graded.
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-[14px]">Look up a public record</div>
+                <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
+                  Contractor license, state business registry, or your shop's website. We'll show you what we found before saving anything.
+                </div>
               </div>
-            </div>
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="text-[color:var(--color-muted)]" aria-hidden="true"><path d="M5 3l4 4-4 4" /></svg>
-          </button>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="text-[color:var(--color-muted)]" aria-hidden="true"><path d="M5 3l4 4-4 4" /></svg>
+            </button>
+            <button
+              type="button"
+              onClick={next}
+              class="mt-3 w-full text-left rounded-lg border border-[color:var(--color-line-2)] hover:bg-[color:var(--color-surface-2)] hover:border-[color:var(--color-line-strong)] px-5 py-4 transition-colors flex items-center gap-4"
+            >
+              <div class="w-9 h-9 rounded-md bg-[color:var(--color-bg-2)] text-[color:var(--color-muted)] grid place-items-center shrink-0">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 2.5h6l3.5 3.5v7.5a0.5 0.5 0 0 1 -0.5 0.5h-9a0.5 0.5 0 0 1 -0.5 -0.5v-11a0.5 0.5 0 0 1 0.5 -0.5z" />
+                  <path d="M9 2.5v3.5h3.5" />
+                </svg>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-[14px]">Skip and fill it in yourself</div>
+                <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
+                  Takes about a minute. Six steps total — none of them graded.
+                </div>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="text-[color:var(--color-muted)]" aria-hidden="true"><path d="M5 3l4 4-4 4" /></svg>
+            </button>
+          </Show>
         </div>
       </Show>
 
@@ -461,6 +556,180 @@ export default function OnboardingFlow(props: Props) {
               {finishing() ? 'Saving…' : "Finish setup →"}
             </Button>
           </div>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+function PublicLookupPanel(p: {
+  businessName: () => string;
+  setBusinessName: (v: string) => void;
+  state: () => string;
+  setState: (v: string) => void;
+  websiteUrl: () => string;
+  setWebsiteUrl: (v: string) => void;
+  busy: () => boolean;
+  triggered: () => boolean;
+  matches: () => PublicMatch[];
+  error: () => string | null;
+  ownerName: string;
+  onRun: () => void;
+  onAccept: (m: PublicMatch) => void;
+  onCancel: () => void;
+  onSkip: () => void;
+}) {
+  const ready = () => !!p.businessName().trim() || !!p.websiteUrl().trim();
+  return (
+    <div>
+      <div class="flex items-baseline gap-3">
+        <h2 class="font-serif text-[26px] font-medium leading-tight flex-1">
+          What should we look up?
+        </h2>
+        <button
+          type="button"
+          onClick={p.onCancel}
+          class="text-xs text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)]"
+        >
+          ← Back
+        </button>
+      </div>
+      <p class="mt-3 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
+        Drop in your business name + state, or your shop's website URL. Brief
+        fetches what's public — license #, classification, address — and shows
+        you what it found <em>before</em> anything gets saved.
+      </p>
+
+      <div class="mt-6 grid grid-cols-1 sm:grid-cols-[1fr_120px] gap-3">
+        <Field label="Business name">
+          <Input
+            value={p.businessName()}
+            onInput={(e) => p.setBusinessName(e.currentTarget.value)}
+            placeholder={p.ownerName || 'L·A Stucco'}
+          />
+        </Field>
+        <Field label="State">
+          <Input
+            value={p.state()}
+            onInput={(e) => p.setState(e.currentTarget.value.toUpperCase())}
+            placeholder="CA"
+            maxlength={4}
+          />
+        </Field>
+      </div>
+      <div class="mt-3">
+        <Field label="Website (optional)" helper="If your shop has one, we'll pull license / address from the footer.">
+          <Input
+            value={p.websiteUrl()}
+            onInput={(e) => p.setWebsiteUrl(e.currentTarget.value)}
+            placeholder="example.com"
+          />
+        </Field>
+      </div>
+      <div class="mt-5 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={p.onSkip}
+          class="text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)] underline"
+        >
+          Skip — I'll fill it in myself
+        </button>
+        <Button variant="accent" disabled={!ready() || p.busy()} onClick={p.onRun}>
+          {p.busy() ? 'Searching…' : 'Search public records'}
+        </Button>
+      </div>
+
+      <Show when={p.error()}>
+        <div class="mt-5 rounded-lg bg-[color:var(--color-danger-tint)] px-4 py-3 text-sm text-[color:var(--color-danger)]">
+          {p.error()}
+        </div>
+      </Show>
+
+      <Show when={p.triggered() && !p.busy() && p.matches().length === 0 && !p.error()}>
+        <div class="mt-6 rounded-lg border border-dashed border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] px-5 py-5 text-center">
+          <div class="text-sm text-[color:var(--color-ink-2)] font-serif italic">
+            Nothing public came back. That's normal — most small shops don't
+            have a registry entry. Fill the profile in yourself; it's a minute.
+          </div>
+          <button
+            type="button"
+            onClick={p.onSkip}
+            class="mt-3 text-sm text-[color:var(--color-accent)] underline"
+          >
+            Fill it in myself →
+          </button>
+        </div>
+      </Show>
+
+      <Show when={p.matches().length > 0}>
+        <div class="mt-6 space-y-3">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+            {p.matches().length} result{p.matches().length === 1 ? '' : 's'}
+          </div>
+          <For each={p.matches()}>
+            {(m) => (
+              <article class="rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] p-4">
+                <div class="flex items-baseline gap-2 mb-1">
+                  <span class="text-[11px] font-mono uppercase tracking-wide text-[color:var(--color-muted)]">
+                    {m.source_label}
+                  </span>
+                  <span class="flex-1" />
+                  <a
+                    href={m.evidence_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-xs text-[color:var(--color-accent)] underline"
+                  >
+                    Source ↗
+                  </a>
+                </div>
+                <h3 class="font-serif text-[18px] font-medium leading-tight">
+                  {m.legal_name ?? '(no legal name found)'}
+                </h3>
+                <Show when={m.trade_name && m.trade_name !== m.legal_name}>
+                  <p class="text-[13px] italic font-serif text-[color:var(--color-muted)] mt-0.5">
+                    dba {m.trade_name}
+                  </p>
+                </Show>
+                <dl class="mt-3 grid grid-cols-2 gap-y-1.5 text-[13px]">
+                  <Show when={m.license_number}>
+                    <dt class="text-[color:var(--color-muted)]">License #</dt>
+                    <dd class="font-mono">
+                      {m.license_number}
+                      <Show when={m.license_classification}>
+                        <span class="text-[color:var(--color-muted)] ml-1">({m.license_classification})</span>
+                      </Show>
+                      <Show when={m.license_jurisdiction}>
+                        <span class="text-[color:var(--color-muted)] ml-1">· {m.license_jurisdiction}</span>
+                      </Show>
+                    </dd>
+                  </Show>
+                  <Show when={m.address}>
+                    <dt class="text-[color:var(--color-muted)]">Address</dt>
+                    <dd>{m.address}</dd>
+                  </Show>
+                  <Show when={m.phone}>
+                    <dt class="text-[color:var(--color-muted)]">Phone</dt>
+                    <dd class="font-mono">{m.phone}</dd>
+                  </Show>
+                  <Show when={m.email}>
+                    <dt class="text-[color:var(--color-muted)]">Email</dt>
+                    <dd>{m.email}</dd>
+                  </Show>
+                </dl>
+                <Show when={m.evidence_excerpt}>
+                  <p class="mt-3 text-[12.5px] font-serif italic text-[color:var(--color-muted)] leading-relaxed border-t border-[color:var(--color-line)] pt-2.5">
+                    "{m.evidence_excerpt}"
+                  </p>
+                </Show>
+                <div class="mt-4 flex justify-end">
+                  <Button variant="accent" onClick={() => p.onAccept(m)}>
+                    Use this →
+                  </Button>
+                </div>
+              </article>
+            )}
+          </For>
         </div>
       </Show>
     </div>
