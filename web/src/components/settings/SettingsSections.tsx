@@ -225,17 +225,51 @@ const INTEGRATIONS = [
 ];
 
 function IntegrationsSection(props: { shop: Shop; onSave: (p: Partial<Shop>) => void }) {
+  // Calendar's "Connect" is special — it has to run an OAuth scope
+  // upgrade through /auth/signin?with_calendar=1, not a local toggle.
+  // Disconnect stays local (just clears the flag).
+  const calConnected = () => !!props.shop.google_calendar_connected && props.shop.google_calendar_scope === 'read';
   return (
     <Card>
       <CardHeader>
         <h3 class="font-serif text-base font-medium flex-1">Connected services</h3>
       </CardHeader>
       <div>
-        <For each={INTEGRATIONS}>
+        <div class="flex items-center gap-3 px-5 py-3.5">
+          <div class="flex-1">
+            <div class="font-medium text-sm">Google Calendar</div>
+            <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
+              Free/busy for the Best-time-to-send chip on Reply / Nudge drafts.
+            </div>
+          </div>
+          <Show when={calConnected()} fallback={<Pill tone="neutral" dot={false}>Not connected</Pill>}>
+            <Pill tone="good">Connected</Pill>
+          </Show>
+          <Show
+            when={calConnected()}
+            fallback={
+              <a
+                href="/auth/signin?with_calendar=1&next=/settings"
+                class="inline-flex items-center justify-center gap-[7px] rounded-lg font-medium whitespace-nowrap px-3 py-1.5 text-[12px] bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] hover:brightness-95"
+              >
+                Connect
+              </a>
+            }
+          >
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => props.onSave({ google_calendar_connected: false, google_calendar_scope: null } as any)}
+            >
+              Disconnect
+            </Button>
+          </Show>
+        </div>
+        <For each={INTEGRATIONS.filter((i) => i.key !== 'google_calendar_connected')}>
           {(item) => {
             const connected = () => !!props.shop[item.key];
             return (
-              <div class="flex items-center gap-3 px-5 py-3.5 border-t border-[color:var(--color-line)] first:border-t-0">
+              <div class="flex items-center gap-3 px-5 py-3.5 border-t border-[color:var(--color-line)]">
                 <div class="flex-1">
                   <div class="font-medium text-sm">{item.label}</div>
                   <div class="text-xs text-[color:var(--color-muted)] mt-0.5">{item.sub}</div>

@@ -9,12 +9,16 @@ Astro.response.headers.set('cache-control', 'no-store');
 const env = Astro.locals.runtime?.env;
 const next = Astro.url.searchParams.get('next') ?? '/dashboard';
 const error = Astro.url.searchParams.get('error');
+// When the user clicks "Connect Calendar" from Settings we route through
+// signin again to upgrade their grant. The next= param sends them back
+// to where they started.
+const withCalendar = Astro.url.searchParams.get('with_calendar') === '1';
 
 const redirectTo = `${Astro.url.origin}/auth/callback?next=${encodeURIComponent(next)}`;
-const googleUrl = env ? googleSignInUrl(env, redirectTo) : '#';
+const googleUrl = env ? googleSignInUrl(env, redirectTo, { withCalendar }) : '#';
 
-// If already signed in, skip the screen
-if (Astro.locals.user) {
+// If already signed in AND we're not trying to add a scope, skip the screen.
+if (Astro.locals.user && !withCalendar) {
   return Astro.redirect(next);
 }
 ---

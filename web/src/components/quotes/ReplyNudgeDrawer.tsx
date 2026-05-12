@@ -8,7 +8,7 @@
  *
  * On Send: POST /api/quote/message; closes drawer.
  */
-import { createEffect, createSignal, Show, onCleanup } from 'solid-js';
+import { createEffect, createSignal, createResource, Show, onCleanup } from 'solid-js';
 import SlideOver from '@/components/ui/SlideOver';
 import Button from '@/components/ui/Button';
 import Field, { Input } from '@/components/ui/Field';
@@ -47,6 +47,17 @@ export default function ReplyNudgeDrawer(props: Props) {
     return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`;
   };
   const [scheduleAt, setScheduleAt] = createSignal(defaultScheduleLocal());
+
+  // Fetch best-send-time from the server (reads Google Calendar if
+  // the shop has it connected, falls back to heuristic otherwise).
+  // Refetches each time the drawer opens for a different quote.
+  const sendTimeKey = () => (props.open ? props.quote?.id ?? null : null);
+  const [sendTime] = createResource(sendTimeKey, async (id: string | null) => {
+    if (!id) return null;
+    const resp = await fetch(`/api/quote/best-send-time?quote_id=${id}`);
+    if (!resp.ok) return null;
+    return resp.json() as Promise<{ when: string; why: string; source: 'calendar' | 'heuristic' }>;
+  });
   let abortController: AbortController | null = null;
   let userTouched = false;
 
@@ -244,12 +255,11 @@ export default function ReplyNudgeDrawer(props: Props) {
         </div>
       </Show>
 
-      {/* "Best time to send" — Google Calendar / email-open heuristic.
-          We don't have live Calendar reads yet (it's a future PR), so
-          for now this surfaces a deterministic-but-plausible suggestion
-          based on time of day + the quote's age. When Calendar lands
-          we swap the body of bestSendTime() to read from
-          /api/quote/best-send-time. */}
+      {/* "Best time to send" — /api/quote/best-send-time reads Google
+          Calendar freebusy if the shop has it connected, otherwise
+          falls back to a deterministic heuristic based on the 9–11 AM
+          weekday window. Source tag (· from your calendar) appears when
+          the response actually came from Calendar. */}
       <Show when={!streaming() && body().trim().length > 0}>
         <div class="mt-3 rounded-lg bg-[color:var(--color-surface-2)] border border-[color:var(--color-line)] px-4 py-3 flex gap-2.5">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-muted)] mt-0.5 shrink-0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
@@ -258,8 +268,13 @@ export default function ReplyNudgeDrawer(props: Props) {
           </svg>
           <p class="text-[13px] leading-relaxed text-[color:var(--color-ink-2)] font-serif flex-1">
             <strong class="font-medium">Best time to send: </strong>
-            <span class="font-medium">{bestSendTime(props.quote).when}</span>
-            <span class="text-[color:var(--color-muted)]">. {bestSendTime(props.quote).why}</span>
+            <span class="font-medium">{sendTime()?.when ?? 'Send now'}</span>
+            <span class="text-[color:var(--color-muted)]">. {sendTime()?.why ?? ''}</span>
+            <Show when={sendTime()?.source === 'calendar'}>
+              <span class="ml-1.5 text-[10.5px] font-mono uppercase tracking-wide text-[color:var(--color-accent)]">
+                · from your calendar
+              </span>
+            </Show>
           </p>
         </div>
       </Show>
@@ -305,47 +320,6 @@ function draftReasoning(
   return `It's been ${days} days. Final-touch tone — respectful but closes the loop if they don't come back.`;
 }
 
-/** Heuristic "Best time to send" suggestion. Stand-in until the real
- * Google Calendar + email-open-pattern endpoint lands; mirrors the
- * design/spec/screens.md spec on the chip's behavior.
- */
-function bestSendTime(quote: AgendaQuote | null): { when: string; why: string } {
-  if (!quote) return { when: 'Send now', why: '' };
-  const now = new Date();
-  const hour = now.getHours();
-  const day = now.getDay(); // 0 Sun .. 6 Sat
-  // Inside the 9-11 AM weekday window — send now is best
-  if (day >= 1 && day <= 5 && hour >= 9 && hour < 11) {
-    return {
-      when: 'Send now',
-      why: 'Weekday mid-morning is when this client tends to open quotes.',
-    };
-  }
-  // Weekend or after-hours: queue for next weekday 9:10 AM
-  const target = nextWeekdayMorning(now);
-  const dayLabel = sameDay(target, addDays(now, 1)) ? 'Tomorrow' : weekdayLabel(target);
-  const time = '9:10 AM';
-  const ageHint =
-    quote.age_days < 3
-      ? 'Window is best inside 48 hours of the original send.'
-      : 'Tuesday morning open-rate window is highest for this segment.';
-  return {
-    when: `${dayLabel}, ${time}`,
-    why: ageHint,
-  };
-}
-
-function addDays(d: Date, n: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-}
-function sameDay(a: Date, b: Date): boolean {
-  return a.toDateString() === b.toDateString();
-}
-function weekdayLabel(d: Date): string {
-  return d.toLocaleDateString('en-US', { weekday: 'long' });
-}
 function nextWeekdayMorning(from: Date): Date {
   const x = new Date(from);
   x.setHours(9, 10, 0, 0);
