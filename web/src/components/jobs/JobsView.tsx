@@ -6,6 +6,7 @@
  * recomputes totals server-side via the refresh_job_totals trigger.
  */
 import { createSignal, For, Show, createMemo, createResource } from 'solid-js';
+import { isServer } from 'solid-js/web';
 import { fmtCurrencyFull } from '@/lib/quote-helpers';
 import StatusPill, { type JobState } from '@/components/ui/StatusPill';
 import Pill from '@/components/ui/Pill';
@@ -50,7 +51,15 @@ async function loadCostLines(jobId: string): Promise<CostLine[]> {
 export default function JobsView(props: Props) {
   const [selectedId, setSelectedId] = createSignal<string | null>(props.jobs[0]?.id ?? null);
   const selected = createMemo(() => props.jobs.find((j) => j.id === selectedId()) ?? null);
-  const [costLines] = createResource(selectedId, (id) => (id ? loadCostLines(id) : Promise.resolve([])));
+  // Source returns null on the SSR pass so the fetcher never fires
+  // server-side — Cloudflare Worker's fetch rejects relative URLs, and
+  // /api/job/[id]/cost-lines is relative. On the client the source
+  // returns selectedId(); falsy selectedId skips the fetcher too,
+  // which gives us a clean empty state on jobs-list pages.
+  const [costLines] = createResource(
+    () => (isServer ? null : selectedId()),
+    (id) => loadCostLines(id),
+  );
   const [drawerOpen, setDrawerOpen] = createSignal(false);
   const [drawerMode, setDrawerMode] = createSignal<JobActionMode>('update');
   const openDrawer = (mode: JobActionMode) => {
