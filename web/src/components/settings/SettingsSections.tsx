@@ -1,14 +1,11 @@
 /**
- * <SettingsSections> — Solid island wrapping all Settings sections.
+ * <SettingsSections> — sectioned Settings page island.
  *
- * Reads /api/shops/me on mount, lets the user edit any section, PATCHes
- * dirty fields. Sections (per design):
- *   Account, Shop & License, Pricing Defaults, Connected Services,
- *   Branding, Notifications, Data Export.
- *
- * Most integrations (QuickBooks, DocuSign, Drive) are placeholder
- * "Connect" rows — the OAuth flows ship in a follow-on. Google Calendar
- * is functional (toggle, persisted in shops table).
+ * Layout: sticky left-rail table of contents + scrollable right column
+ * with H2-grouped sections. Each card hangs an `id` matching its TOC
+ * entry so anchor clicks scroll to it. Reads /api/shops/me on mount;
+ * if that fails the page surfaces the error rather than showing a
+ * perpetual "Loading…" — operators can't fix what they can't see.
  */
 import { createResource, createSignal, For, Show } from 'solid-js';
 import Button from '@/components/ui/Button';
@@ -19,9 +16,15 @@ import ThemeToggle from '@/components/ui/ThemeToggle';
 
 type Shop = Record<string, any>;
 
+interface Props {
+  user_email: string;
+  user_name: string;
+  role: 'owner' | 'admin' | 'member';
+}
+
 async function loadShop(): Promise<Shop> {
   const resp = await fetch('/api/shops/me');
-  if (!resp.ok) throw new Error(`Could not load shop (${resp.status})`);
+  if (!resp.ok) throw new Error(`Could not load shop (${resp.status}): ${await resp.text()}`);
   return resp.json();
 }
 
@@ -35,7 +38,26 @@ async function saveShop(patch: Partial<Shop>): Promise<Shop> {
   return resp.json();
 }
 
-export default function SettingsSections() {
+const TOC: Array<{ id: string; label: string; group: 'identity' | 'work' | 'data' | 'account' }> = [
+  { id: 'account',     label: 'Account',         group: 'account' },
+  { id: 'shop',        label: 'Shop',            group: 'identity' },
+  { id: 'license',     label: 'License',         group: 'identity' },
+  { id: 'pricing',     label: 'Pricing',         group: 'work' },
+  { id: 'voice',       label: 'Voice',           group: 'work' },
+  { id: 'integrations',label: 'Connected',       group: 'data' },
+  { id: 'delivery',    label: 'Delivery',        group: 'data' },
+  { id: 'export',      label: 'Data export',     group: 'data' },
+  { id: 'appearance',  label: 'Appearance',      group: 'account' },
+];
+
+const GROUP_LABELS: Record<string, string> = {
+  account: 'Account',
+  identity: 'Your shop, on the record',
+  work: 'How you work',
+  data: 'Where data flows',
+};
+
+export default function SettingsSections(props: Props) {
   const [shop, { mutate, refetch }] = createResource<Shop>(loadShop);
   const [savingKey, setSavingKey] = createSignal<string | null>(null);
   const [errorKey, setErrorKey] = createSignal<string | null>(null);
@@ -55,33 +77,142 @@ export default function SettingsSections() {
   };
 
   return (
-    <Show when={shop()} fallback={<div class="text-sm text-[color:var(--color-muted)]">Loading…</div>}>
-      <div class="space-y-6">
-        <AppearanceSection />
-        <ShopSection shop={shop()!} saving={savingKey() === 'shop'} onSave={(p) => onSave('shop', p)} />
-        <LicenseSection shop={shop()!} saving={savingKey() === 'license'} onSave={(p) => onSave('license', p)} />
-        <PricingSection shop={shop()!} saving={savingKey() === 'pricing'} onSave={(p) => onSave('pricing', p)} />
-        <VoiceProfileSection shop={shop()!} saving={savingKey() === 'voice'} onSave={(p) => onSave('voice', p)} />
-        <IntegrationsSection shop={shop()!} onSave={(p) => onSave('integrations', p)} />
-        <DeliveryStatusSection />
-        <DataExportSection shopId={shop()!.id} />
-      </div>
-      <Show when={errorKey()}>
-        <div
-          role="alert"
-          class="fixed bottom-4 right-4 rounded-lg border border-[color:var(--color-danger)] bg-[color:var(--color-danger-tint)] px-4 py-3 text-sm text-[color:var(--color-danger)] shadow-[var(--shadow-md)]"
-        >
-          Save failed. <button class="underline" onClick={() => refetch()}>Try again</button>
+    <div class="grid grid-cols-1 lg:grid-cols-[200px_1fr] gap-x-10 gap-y-6">
+      {/* Left-rail TOC */}
+      <nav class="hidden lg:block">
+        <div class="sticky top-6">
+          <For each={(['account', 'identity', 'work', 'data'] as const)}>
+            {(group) => (
+              <div class="mb-4">
+                <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1.5">
+                  {GROUP_LABELS[group]}
+                </div>
+                <ul class="space-y-0.5">
+                  <For each={TOC.filter((t) => t.group === group)}>
+                    {(item) => (
+                      <li>
+                        <a
+                          href={`#${item.id}`}
+                          class="block px-2 py-1 -mx-2 rounded text-[13px] text-[color:var(--color-ink-2)] hover:bg-[color:var(--color-surface-2)] hover:text-[color:var(--color-ink)]"
+                        >
+                          {item.label}
+                        </a>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </div>
+            )}
+          </For>
         </div>
-      </Show>
-    </Show>
+      </nav>
+
+      {/* Right column */}
+      <div class="min-w-0">
+        <Show
+          when={shop()}
+          fallback={
+            <Show
+              when={shop.error}
+              fallback={
+                <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-8 text-sm italic font-serif text-[color:var(--color-muted)]">
+                  Loading your shop…
+                </div>
+              }
+            >
+              <div class="rounded-xl border border-[color:var(--color-danger)] bg-[color:var(--color-danger-tint)] px-5 py-4 text-sm text-[color:var(--color-danger)]">
+                <div class="font-medium mb-1">Couldn't load your shop.</div>
+                <div class="font-mono text-xs">{shop.error?.message}</div>
+                <button class="mt-2 underline" onClick={() => refetch()}>Try again</button>
+              </div>
+            </Show>
+          }
+        >
+          <div class="space-y-10">
+            <GroupHeader id="account-group" label={GROUP_LABELS.account} />
+            <div class="space-y-5 -mt-6">
+              <AccountSection id="account" user_email={props.user_email} user_name={props.user_name} role={props.role} />
+              <AppearanceSection id="appearance" />
+            </div>
+
+            <GroupHeader id="identity-group" label={GROUP_LABELS.identity} />
+            <div class="space-y-5 -mt-6">
+              <ShopSection id="shop" shop={shop()!} saving={savingKey() === 'shop'} onSave={(p) => onSave('shop', p)} />
+              <LicenseSection id="license" shop={shop()!} saving={savingKey() === 'license'} onSave={(p) => onSave('license', p)} />
+            </div>
+
+            <GroupHeader id="work-group" label={GROUP_LABELS.work} />
+            <div class="space-y-5 -mt-6">
+              <PricingSection id="pricing" shop={shop()!} saving={savingKey() === 'pricing'} onSave={(p) => onSave('pricing', p)} />
+              <VoiceProfileSection id="voice" shop={shop()!} saving={savingKey() === 'voice'} onSave={(p) => onSave('voice', p)} />
+            </div>
+
+            <GroupHeader id="data-group" label={GROUP_LABELS.data} />
+            <div class="space-y-5 -mt-6">
+              <IntegrationsSection id="integrations" shop={shop()!} onSave={(p) => onSave('integrations', p)} />
+              <DeliveryStatusSection id="delivery" />
+              <DataExportSection id="export" shopId={shop()!.id} />
+            </div>
+          </div>
+          <Show when={errorKey()}>
+            <div
+              role="alert"
+              class="fixed bottom-4 right-4 rounded-lg border border-[color:var(--color-danger)] bg-[color:var(--color-danger-tint)] px-4 py-3 text-sm text-[color:var(--color-danger)] shadow-[var(--shadow-md)]"
+            >
+              Save failed. <button class="underline" onClick={() => refetch()}>Try again</button>
+            </div>
+          </Show>
+        </Show>
+      </div>
+    </div>
   );
 }
 
-function AppearanceSection() {
+function GroupHeader(p: { id: string; label: string }) {
+  return (
+    <div id={p.id} class="pb-2 border-b border-[color:var(--color-line)]">
+      <h2 class="font-serif text-[20px] font-medium tracking-tight">{p.label}</h2>
+    </div>
+  );
+}
+
+function AccountSection(p: { id: string; user_email: string; user_name: string; role: string }) {
+  return (
+    <Card class="scroll-mt-6" >
+      <div id={p.id} class="absolute" />
+      <CardHeader>
+        <h3 class="font-serif text-base font-medium flex-1">Signed in</h3>
+        <Pill tone="neutral" dot={false} size="sm">{p.role}</Pill>
+      </CardHeader>
+      <CardBody>
+        <dl class="space-y-2.5 text-sm">
+          <div class="flex items-baseline gap-3">
+            <dt class="text-[color:var(--color-muted)] w-20 shrink-0">Name</dt>
+            <dd class="font-medium">{p.user_name}</dd>
+          </div>
+          <div class="flex items-baseline gap-3">
+            <dt class="text-[color:var(--color-muted)] w-20 shrink-0">Email</dt>
+            <dd class="font-mono text-[13px]">{p.user_email}</dd>
+          </div>
+        </dl>
+      </CardBody>
+      <CardFooter>
+        <div class="flex-1" />
+        <a
+          href="/auth/signout"
+          class="inline-flex items-center justify-center gap-[7px] rounded-lg font-medium whitespace-nowrap px-3.5 py-2 text-[13px] bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] text-[color:var(--color-ink)] hover:bg-[color:var(--color-surface-2)]"
+        >
+          Sign out
+        </a>
+      </CardFooter>
+    </Card>
+  );
+}
+
+function AppearanceSection(p: { id: string }) {
   return (
     <Card>
-      <CardHeader>
+      <CardHeader id={p.id}>
         <h3 class="font-serif text-base font-medium flex-1">Appearance</h3>
       </CardHeader>
       <CardBody>
@@ -99,7 +230,7 @@ function AppearanceSection() {
   );
 }
 
-function ShopSection(props: { shop: Shop; saving: boolean; onSave: (p: Partial<Shop>) => void }) {
+function ShopSection(props: { id: string; shop: Shop; saving: boolean; onSave: (p: Partial<Shop>) => void }) {
   const [form, setForm] = createSignal({
     legal_name: props.shop.legal_name ?? '',
     trade_name: props.shop.trade_name ?? '',
@@ -107,12 +238,12 @@ function ShopSection(props: { shop: Shop; saving: boolean; onSave: (p: Partial<S
   });
   return (
     <Card>
-      <CardHeader>
+      <CardHeader id={props.id}>
         <h3 class="font-serif text-base font-medium flex-1">Shop</h3>
       </CardHeader>
       <CardBody>
-        <div class="grid grid-cols-2 gap-4">
-          <Field label="Legal name" class="col-span-2">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Field label="Legal name" class="sm:col-span-2">
             <Input value={form().legal_name} onInput={(e) => setForm({ ...form(), legal_name: e.currentTarget.value })} />
           </Field>
           <Field label="Trade name / DBA">
@@ -133,7 +264,7 @@ function ShopSection(props: { shop: Shop; saving: boolean; onSave: (p: Partial<S
   );
 }
 
-function LicenseSection(props: { shop: Shop; saving: boolean; onSave: (p: Partial<Shop>) => void }) {
+function LicenseSection(props: { id: string; shop: Shop; saving: boolean; onSave: (p: Partial<Shop>) => void }) {
   const [form, setForm] = createSignal({
     license_number: props.shop.license_number ?? '',
     license_jurisdiction: props.shop.license_jurisdiction ?? '',
@@ -141,18 +272,18 @@ function LicenseSection(props: { shop: Shop; saving: boolean; onSave: (p: Partia
   });
   return (
     <Card>
-      <CardHeader>
+      <CardHeader id={props.id}>
         <h3 class="font-serif text-base font-medium flex-1">License</h3>
       </CardHeader>
       <CardBody>
-        <div class="grid grid-cols-3 gap-4">
-          <Field label="Number" class="col-span-2">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <Field label="Number" class="sm:col-span-2">
             <Input value={form().license_number} onInput={(e) => setForm({ ...form(), license_number: e.currentTarget.value })} />
           </Field>
           <Field label="State">
             <Input maxlength={4} value={form().license_jurisdiction} onInput={(e) => setForm({ ...form(), license_jurisdiction: e.currentTarget.value })} />
           </Field>
-          <Field label="Classification" class="col-span-3">
+          <Field label="Classification" class="sm:col-span-3">
             <Input value={form().license_classification} onInput={(e) => setForm({ ...form(), license_classification: e.currentTarget.value })} />
           </Field>
         </div>
@@ -167,7 +298,7 @@ function LicenseSection(props: { shop: Shop; saving: boolean; onSave: (p: Partia
   );
 }
 
-function PricingSection(props: { shop: Shop; saving: boolean; onSave: (p: Partial<Shop>) => void }) {
+function PricingSection(props: { id: string; shop: Shop; saving: boolean; onSave: (p: Partial<Shop>) => void }) {
   const [form, setForm] = createSignal({
     default_markup_pct: props.shop.default_markup_pct ?? 32,
     default_labor_rate: props.shop.default_labor_rate ?? 92,
@@ -175,11 +306,14 @@ function PricingSection(props: { shop: Shop; saving: boolean; onSave: (p: Partia
   });
   return (
     <Card>
-      <CardHeader>
+      <CardHeader id={props.id}>
         <h3 class="font-serif text-base font-medium flex-1">Pricing defaults</h3>
       </CardHeader>
       <CardBody>
-        <div class="grid grid-cols-3 gap-4">
+        <p class="text-[13px] font-serif italic text-[color:var(--color-muted)] mb-4 leading-relaxed">
+          Brief stamps these on every quote until you override them per-line. Refines automatically as you close more jobs.
+        </p>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Field label="Target margin %">
             <Input
               type="number"
@@ -224,14 +358,14 @@ const INTEGRATIONS = [
   { key: 'drive_connected', label: 'Google Drive', sub: 'Attach files from your Drive', toggleable: false },
 ];
 
-function IntegrationsSection(props: { shop: Shop; onSave: (p: Partial<Shop>) => void }) {
+function IntegrationsSection(props: { id: string; shop: Shop; onSave: (p: Partial<Shop>) => void }) {
   // Calendar's "Connect" is special — it has to run an OAuth scope
   // upgrade through /auth/signin?with_calendar=1, not a local toggle.
   // Disconnect stays local (just clears the flag).
   const calConnected = () => !!props.shop.google_calendar_connected && props.shop.google_calendar_scope === 'read';
   return (
     <Card>
-      <CardHeader>
+      <CardHeader id={props.id}>
         <h3 class="font-serif text-base font-medium flex-1">Connected services</h3>
       </CardHeader>
       <div>
@@ -298,7 +432,7 @@ function IntegrationsSection(props: { shop: Shop; onSave: (p: Partial<Shop>) => 
   );
 }
 
-function VoiceProfileSection(props: { shop: Shop; saving: boolean; onSave: (p: Partial<Shop>) => void }) {
+function VoiceProfileSection(props: { id: string; shop: Shop; saving: boolean; onSave: (p: Partial<Shop>) => void }) {
   const initialProfile = props.shop.voice_profile ?? {};
   const [intro, setIntro] = createSignal<string>(initialProfile.boilerplate_intro ?? '');
   const [closing, setClosing] = createSignal<string>(initialProfile.boilerplate_closing ?? '');
@@ -320,7 +454,7 @@ function VoiceProfileSection(props: { shop: Shop; saving: boolean; onSave: (p: P
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader id={props.id}>
         <h3 class="font-serif text-base font-medium flex-1">Voice</h3>
         <Show when={calibratedAt}>
           <Pill tone="good" size="sm" dot={false}>
@@ -398,7 +532,7 @@ function VoiceProfileSection(props: { shop: Shop; saving: boolean; onSave: (p: P
   );
 }
 
-function DeliveryStatusSection() {
+function DeliveryStatusSection(props: { id: string }) {
   const [report] = createResource(async () => {
     const resp = await fetch('/api/health/delivery');
     if (!resp.ok) throw new Error(`Health probe ${resp.status}`);
@@ -431,7 +565,7 @@ function DeliveryStatusSection() {
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader id={props.id}>
         <h3 class="font-serif text-base font-medium flex-1">Delivery</h3>
         <a
           href="/api/health/delivery"
@@ -448,10 +582,10 @@ function DeliveryStatusSection() {
   );
 }
 
-function DataExportSection(props: { shopId: string }) {
+function DataExportSection(props: { id: string; shopId: string }) {
   return (
     <Card>
-      <CardHeader>
+      <CardHeader id={props.id}>
         <h3 class="font-serif text-base font-medium flex-1">Data export</h3>
       </CardHeader>
       <CardBody>

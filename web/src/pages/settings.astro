@@ -23,6 +23,8 @@ const { data: shop } = await svc
 
 const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
 const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
+const userName = user.name ?? user.email ?? 'You';
+const role = (membership.role.charAt(0).toUpperCase() + membership.role.slice(1)) as 'Owner' | 'Admin' | 'Member';
 ---
 
 <Brief
@@ -31,20 +33,26 @@ const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' '
   shopLabel={shopLabel}
   shopInitial={shopLabel.charAt(0).toUpperCase()}
   ownerFirst={ownerFirst}
-  ownerRole={membership.role.charAt(0).toUpperCase() + membership.role.slice(1)}
+  ownerRole={role}
   dataState={shop?.data_state ?? 'cold-start'}
 >
-  <div class="mb-8">
-    <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1">
-      Account
+  <div class="mb-10">
+    <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1.5">
+      Settings
     </div>
     <h1 class="font-serif text-[36px] font-medium leading-tight tracking-tight">
       How Brief knows you.
     </h1>
     <p class="mt-3 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
-      Your shop, your license, your pricing defaults — the things Brief stamps on every quote. Change anything any time. Signed in as <strong class="font-medium">{user.email}</strong>.
-      <a href="/auth/signout" class="ml-1 underline text-[color:var(--color-accent)] hover:brightness-95">Sign out</a>
+      Your shop, your license, your pricing defaults, the way Brief writes.
+      Change anything any time — nothing here is locked in.
     </p>
   </div>
-  <SettingsSections client:load />
+
+  <SettingsSections
+    client:load
+    user_email={user.email ?? ''}
+    user_name={userName}
+    role={membership.role}
+  />
 </Brief>
