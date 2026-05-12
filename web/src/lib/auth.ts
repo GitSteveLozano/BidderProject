@@ -33,15 +33,23 @@ export function authClient(env: CloudflareEnv): SupabaseClient {
   });
 }
 
-/** Build the OAuth redirect URL for Google sign-in. */
+/** Build the OAuth redirect URL for Google sign-in.
+ *
+ * Sensitive scopes (e.g. `https://www.googleapis.com/auth/calendar.readonly`)
+ * are NOT requested at initial sign-in for v1 — they require either Google
+ * verification or test-user listing, which gates bringup. The Brief
+ * Calendar feature (best-send-time suggestions) will request scope on
+ * demand in a future PR via a re-auth flow from Settings.
+ *
+ * For now: only the basic profile scopes Supabase ships with by default
+ * (openid, email, profile), which keep the app un-sensitive and
+ * accessible to any Google user without test-user listing.
+ */
 export function googleSignInUrl(env: CloudflareEnv, redirectTo: string): string {
   const params = new URLSearchParams({
     provider: 'google',
     redirect_to: redirectTo,
   });
-  // Calendar scope requested up front so step 7 can consent. Re-asks only
-  // if the user didn't grant calendar access on the initial flow.
-  params.set('scopes', 'https://www.googleapis.com/auth/calendar');
   return `${env.SUPABASE_URL}/auth/v1/authorize?${params.toString()}`;
 }
 
