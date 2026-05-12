@@ -317,17 +317,14 @@ export default function OnboardingFlow(props: Props) {
       </Show>
 
       <Show when={stepId() === 'license'}>
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-8 shadow-[var(--shadow-sm)]">
-          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-            Step 4 · License
-          </div>
-          <h2 class="mt-1 font-serif text-[24px] font-medium leading-tight">
-            Contractor license.
+        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
+          <h2 class="font-serif text-[26px] font-medium leading-tight">
+            Your license — for the bottom of every bid.
           </h2>
-          <p class="mt-3 text-sm text-[color:var(--color-muted)] leading-relaxed">
-            We'll print it on the bottom of every bid. Skip if you'd rather add it later — most clients will ask before they sign anyway.
+          <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
+            We print it on the footer of every quote and remind you when it's about to expire. Skip if you'd rather add it later — most clients will ask before they sign anyway.
           </p>
-          <div class="mt-5 grid grid-cols-3 gap-4">
+          <div class="mt-6 grid grid-cols-3 gap-4">
             <Field label="License #" class="col-span-2">
               <Input
                 value={profile().license_number}
@@ -351,7 +348,7 @@ export default function OnboardingFlow(props: Props) {
               />
             </Field>
           </div>
-          <div class="mt-6 flex items-center justify-between">
+          <div class="mt-7 flex items-center justify-between">
             <Button variant="ghost" onClick={back}>← Back</Button>
             <Button variant="accent" onClick={next}>Continue →</Button>
           </div>
@@ -359,21 +356,21 @@ export default function OnboardingFlow(props: Props) {
       </Show>
 
       <Show when={stepId() === 'confirm'}>
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-8 shadow-[var(--shadow-sm)]">
-          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-            Step 5 · Confirm
-          </div>
-          <h2 class="mt-1 font-serif text-[24px] font-medium leading-tight">
+        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
+          <h2 class="font-serif text-[26px] font-medium leading-tight">
             Your shop, on the record.
           </h2>
-          <div class="mt-5 grid grid-cols-2 gap-4">
+          <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
+            What clients see when Brief introduces your shop. You can change any of this later from Settings — nothing's locked in.
+          </p>
+          <div class="mt-6 grid grid-cols-2 gap-4">
             <Field label="Legal name" class="col-span-2">
               <Input
                 value={profile().legal_name}
                 onInput={(e) => updateProfile({ legal_name: e.currentTarget.value })}
               />
             </Field>
-            <Field label="DBA / Trade name" class="col-span-2">
+            <Field label="DBA / Trade name" class="col-span-2" helper="The name you actually go by on bids.">
               <Input
                 value={profile().trade_name}
                 onInput={(e) => updateProfile({ trade_name: e.currentTarget.value })}
@@ -384,7 +381,7 @@ export default function OnboardingFlow(props: Props) {
               <Input value={props.ownerEmail} disabled />
             </Field>
           </div>
-          <div class="mt-6 flex items-center justify-between">
+          <div class="mt-7 flex items-center justify-between">
             <Button variant="ghost" onClick={back}>← Back</Button>
             <Button variant="accent" onClick={next}>Continue →</Button>
           </div>
@@ -392,18 +389,15 @@ export default function OnboardingFlow(props: Props) {
       </Show>
 
       <Show when={stepId() === 'defaults'}>
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-8 shadow-[var(--shadow-sm)]">
-          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-            Step 6 · Defaults
-          </div>
-          <h2 class="mt-1 font-serif text-[24px] font-medium leading-tight">
-            Pricing defaults.
+        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
+          <h2 class="font-serif text-[26px] font-medium leading-tight">
+            How you price, by default.
           </h2>
-          <p class="mt-3 text-sm text-[color:var(--color-muted)] leading-relaxed">
-            Best guesses for now — Brief refines these as you close jobs.
+          <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
+            Best guesses for now. Brief refines these as you close jobs — once we see 8 of them at a service line, the recommendation updates automatically. You'll always be the one who hits send.
           </p>
-          <div class="mt-5 grid grid-cols-2 gap-4">
-            <Field label="Target margin %" helper="Standard: 30–35%">
+          <div class="mt-6 grid grid-cols-2 gap-4">
+            <Field label="Target margin %" helper="Industry standard for finishing trades runs 30–35%.">
               <Input
                 type="number"
                 step="0.5"
@@ -411,7 +405,7 @@ export default function OnboardingFlow(props: Props) {
                 onInput={(e) => updateProfile({ default_markup_pct: parseFloat(e.currentTarget.value || '0') })}
               />
             </Field>
-            <Field label="Loaded labor rate ($/hr)" helper="Burdened average across your crew">
+            <Field label="Loaded labor rate ($/hr)" helper="Burdened average across your crew.">
               <Input
                 type="number"
                 step="1"
@@ -420,7 +414,7 @@ export default function OnboardingFlow(props: Props) {
               />
             </Field>
           </div>
-          <div class="mt-6 flex items-center justify-between">
+          <div class="mt-7 flex items-center justify-between">
             <Button variant="ghost" onClick={back}>← Back</Button>
             <Button variant="accent" onClick={next}>Continue →</Button>
           </div>
@@ -428,34 +422,40 @@ export default function OnboardingFlow(props: Props) {
       </Show>
 
       <Show when={stepId() === 'calendar'}>
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-8 shadow-[var(--shadow-sm)]">
-          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-            Step 7 · Calendar
-          </div>
-          <h2 class="mt-1 font-serif text-[24px] font-medium leading-tight">
-            {props.calendarAlreadyConnected ? 'Calendar connected.' : 'Connect your calendar.'}
+        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
+          <h2 class="font-serif text-[26px] font-medium leading-tight">
+            {props.calendarAlreadyConnected ? 'Your calendar is connected.' : 'One last thing — your calendar.'}
           </h2>
-          <p class="mt-3 text-sm text-[color:var(--color-muted)] leading-relaxed">
-            Brief reads your free/busy to suggest the best time to send follow-ups. Read-only — nothing posted without your say-so.
+          <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
+            Brief reads your free/busy so it can suggest the best time to send a follow-up. Read-only — nothing gets posted to your calendar without your say-so. You can always disconnect from Settings.
           </p>
-          <div class="mt-5 rounded-lg border border-[color:var(--color-line)] bg-[color:var(--color-surface-2)] px-4 py-3.5 flex items-center gap-3">
-            <div class="flex-1 text-sm">
-              <strong class="font-medium">Google Calendar</strong>
+          <div class="mt-6 rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] px-5 py-4 flex items-center gap-4">
+            <div class="w-9 h-9 rounded-md bg-[color:var(--color-bg)] border border-[color:var(--color-line)] grid place-items-center shrink-0">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <rect x="2.5" y="3.5" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4" class="text-[color:var(--color-muted)]" />
+                <path d="M2.5 7h13M6 1.5v3M12 1.5v3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="text-[color:var(--color-muted)]" />
+              </svg>
+            </div>
+            <div class="flex-1">
+              <div class="font-medium text-sm">Google Calendar</div>
               <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
-                {calendarConnected() ? 'Connected — read access' : 'Not connected'}
+                {calendarConnected() ? 'Connected — read-only access' : 'Not connected yet'}
               </div>
             </div>
-            <label class="inline-flex items-center gap-2 text-sm">
+            <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
               <input
                 type="checkbox"
                 checked={calendarConnected()}
                 onChange={(e) => setCalendarConnected(e.currentTarget.checked)}
-                class="w-4 h-4 accent-[color:var(--color-accent)]"
+                class="w-4 h-4 accent-[color:var(--color-accent)] cursor-pointer"
               />
-              {calendarConnected() ? 'Enabled' : 'Enable'}
+              <span class="font-medium">{calendarConnected() ? 'Enabled' : 'Enable'}</span>
             </label>
           </div>
-          <div class="mt-6 flex items-center justify-between">
+          <p class="mt-3 text-xs italic font-serif text-[color:var(--color-muted)]">
+            That's fine if you'd rather skip — Brief works without it; you'll just schedule sends manually instead of getting suggestions.
+          </p>
+          <div class="mt-7 flex items-center justify-between">
             <Button variant="ghost" onClick={back}>← Back</Button>
             <Button variant="accent" disabled={finishing()} onClick={finish}>
               {finishing() ? 'Saving…' : "Finish setup →"}
