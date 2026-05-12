@@ -302,7 +302,15 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           rendering={renderingPdf}
           pdfUrl={pdfUrl}
           total={total}
+          baseSubtotal={baseSubtotal}
+          marginAmount={marginAmount}
+          markupPct={markupPct}
+          lineItems={lineItems}
           clientName={clientName}
+          clientContact={clientContact}
+          projectTitle={projectTitle}
+          projectAddress={projectAddress}
+          shop={props.shop}
           onBack={() => setStepIdx(2)}
           onSend={saveAndSend}
           sending={savingQuote}
@@ -312,8 +320,13 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
 
       <Show when={stepId() === 'send'}>
         <SentStep
+          quoteId={quoteId}
           quoteRef={quoteRef}
           clientName={clientName}
+          clientContact={clientContact}
+          projectTitle={projectTitle}
+          total={total}
+          lineItemCount={() => lineItems().length}
           onNewQuote={() => window.location.reload()}
         />
       </Show>
@@ -755,7 +768,15 @@ function ReviewStep(p: {
   rendering: () => boolean;
   pdfUrl: () => string | null;
   total: () => number;
+  baseSubtotal: () => number;
+  marginAmount: () => number;
+  markupPct: () => number;
+  lineItems: () => LineItem[];
   clientName: () => string;
+  clientContact: () => string;
+  projectTitle: () => string;
+  projectAddress: () => string;
+  shop: ShopContext;
   onBack: () => void;
   onSend: () => void;
   sending: () => boolean;
@@ -769,6 +790,36 @@ function ReviewStep(p: {
     iframeRef.contentWindow.print();
   };
 
+  const fmt = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const recipient = () => p.clientContact()?.trim() || p.clientName();
+
+  // Pre-send readiness checks — each row gets a green check or a soft warning.
+  const checks = createMemo(() => {
+    const items = p.lineItems();
+    return [
+      {
+        ok: items.length > 0,
+        label: `${items.length} line item${items.length === 1 ? '' : 's'} priced`,
+        sub: items.length === 0 ? 'Pricing step is empty — go back and add at least one line.' : undefined,
+      },
+      {
+        ok: p.markupPct() >= 20,
+        label: `${p.markupPct().toFixed(0)}% markup applied`,
+        sub: p.markupPct() < 20 ? 'Below your typical floor; double-check this is intentional.' : undefined,
+      },
+      {
+        ok: !!p.projectAddress().trim(),
+        label: 'Project address on the quote',
+        sub: !p.projectAddress().trim() ? 'Optional, but most signers expect it.' : undefined,
+      },
+      {
+        ok: !!p.clientContact().trim() || !!p.clientName().trim(),
+        label: 'Recipient set',
+        sub: undefined,
+      },
+    ];
+  });
+
   return (
     <div>
       <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
@@ -777,26 +828,96 @@ function ReviewStep(p: {
       <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">
         Read through it once.
       </h1>
-      <p class="mt-2 text-sm text-[color:var(--color-muted)]">
-        Final price: <span class="font-serif font-medium text-[color:var(--color-ink)]">
-          ${p.total().toLocaleString(undefined, { minimumFractionDigits: 2 })}
-        </span> to {p.clientName()}.
+      <p class="mt-2 text-[15px] font-serif italic text-[color:var(--color-muted)]">
+        Brief renders the PDF from your shop's letterhead. The numbers below are
+        what {recipient()} sees.
       </p>
 
-      <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface-2)] overflow-hidden">
-        <Show when={p.rendering()}>
-          <div class="aspect-[8.5/11] flex items-center justify-center text-sm text-[color:var(--color-muted)]">
-            Rendering preview…
+      <div class="mt-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface-2)] overflow-hidden">
+          <Show when={p.rendering()}>
+            <div class="aspect-[8.5/11] flex items-center justify-center text-sm text-[color:var(--color-muted)]">
+              Rendering preview…
+            </div>
+          </Show>
+          <Show when={!p.rendering() && p.pdfUrl()}>
+            <iframe
+              ref={iframeRef!}
+              src={p.pdfUrl()!}
+              class="w-full aspect-[8.5/11] bg-white"
+              title="Bid preview"
+            />
+          </Show>
+        </div>
+
+        <aside class="space-y-4">
+          {/* Final price card */}
+          <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">Final price</div>
+            <div class="mt-1 font-serif text-[32px] font-medium tabular-nums leading-none">
+              {fmt(p.total())}
+            </div>
+            <div class="mt-2 text-[12.5px] text-[color:var(--color-muted)]">
+              to <span class="font-medium text-[color:var(--color-ink)]">{recipient()}</span>
+            </div>
+            <dl class="mt-4 space-y-1.5 text-[13px] border-t border-[color:var(--color-line)] pt-3">
+              <div class="flex justify-between">
+                <dt class="text-[color:var(--color-muted)]">Line items subtotal</dt>
+                <dd class="font-mono tabular-nums">{fmt(p.baseSubtotal())}</dd>
+              </div>
+              <div class="flex justify-between">
+                <dt class="text-[color:var(--color-muted)]">Markup ({p.markupPct().toFixed(0)}%)</dt>
+                <dd class="font-mono tabular-nums">{fmt(p.marginAmount())}</dd>
+              </div>
+              <div class="flex justify-between font-medium pt-1.5 border-t border-[color:var(--color-line)]">
+                <dt>Total</dt>
+                <dd class="font-mono tabular-nums">{fmt(p.total())}</dd>
+              </div>
+            </dl>
           </div>
-        </Show>
-        <Show when={!p.rendering() && p.pdfUrl()}>
-          <iframe
-            ref={iframeRef!}
-            src={p.pdfUrl()!}
-            class="w-full aspect-[8.5/11] bg-white"
-            title="Bid preview"
-          />
-        </Show>
+
+          {/* Pre-send checklist */}
+          <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-3">Before you send</div>
+            <ul class="space-y-2.5">
+              <For each={checks()}>
+                {(c) => (
+                  <li class="flex items-start gap-2.5 text-[13px]">
+                    <span class="w-4 h-4 mt-0.5 grid place-items-center shrink-0" aria-hidden="true">
+                      <Show
+                        when={c.ok}
+                        fallback={
+                          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-warn)]" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                            <circle cx="7" cy="7" r="5.5" />
+                            <path d="M7 4.5v3M7 9.5v.2" />
+                          </svg>
+                        }
+                      >
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-good)]" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M2.5 7l3 3 6-6.5" />
+                        </svg>
+                      </Show>
+                    </span>
+                    <div class="flex-1">
+                      <div class={c.ok ? '' : 'text-[color:var(--color-ink-2)]'}>{c.label}</div>
+                      <Show when={c.sub}>
+                        <div class="text-[11.5px] text-[color:var(--color-muted)] mt-0.5 leading-relaxed">{c.sub}</div>
+                      </Show>
+                    </div>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </div>
+
+          {/* Letterhead snippet */}
+          <div class="rounded-xl bg-[color:var(--color-surface-2)] px-4 py-3 text-[12px] text-[color:var(--color-muted)] leading-relaxed font-serif">
+            Sent from <span class="font-medium text-[color:var(--color-ink-2)]">{p.shop.trade_name || p.shop.legal_name}</span>
+            <Show when={p.shop.license_number}>
+              {' · '}License {p.shop.license_number}{p.shop.license_jurisdiction ? ` (${p.shop.license_jurisdiction})` : ''}
+            </Show>
+          </div>
+        </aside>
       </div>
 
       <Show when={!p.rendering() && p.pdfUrl()}>
@@ -831,27 +952,111 @@ function ReviewStep(p: {
 }
 
 function SentStep(p: {
+  quoteId: () => string | null;
   quoteRef: () => string | null;
   clientName: () => string;
+  clientContact: () => string;
+  projectTitle: () => string;
+  total: () => number;
+  lineItemCount: () => number;
   onNewQuote: () => void;
 }) {
+  const sentAt = new Date().toLocaleString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  const fmt = (n: number) =>
+    `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const recipient = () => p.clientContact()?.trim() || p.clientName();
+
   return (
-    <div class="text-center py-16">
-      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-        Sent
+    <div class="max-w-[720px] mx-auto pt-8 pb-16">
+      <div class="text-center">
+        <div
+          class="inline-flex w-14 h-14 rounded-full bg-[color:var(--color-good-tint)] text-[color:var(--color-good)] items-center justify-center mb-4"
+          aria-hidden="true"
+        >
+          <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 11l5 5 10-10" />
+          </svg>
+        </div>
+        <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">Step 5 · Sent</div>
+        <h1 class="mt-1 font-serif text-[40px] font-medium leading-tight">Off it goes.</h1>
+        <p class="mt-3 text-[15px] font-serif italic text-[color:var(--color-muted)] max-w-[42ch] mx-auto leading-relaxed">
+          {p.quoteRef()} is in {recipient()}'s inbox. Brief will tell you when it's read.
+        </p>
       </div>
-      <h1 class="mt-2 font-serif text-[40px] font-medium leading-tight">
-        Off it goes.
-      </h1>
-      <p class="mt-3 text-sm text-[color:var(--color-muted)] max-w-md mx-auto">
-        Quote {p.quoteRef()} to {p.clientName()}. Brief will let you know when they open it.
-      </p>
-      <div class="mt-6 flex items-center justify-center gap-2">
+
+      {/* Ticket-stub summary */}
+      <div class="mt-8 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
+        <div class="px-5 py-3 border-b border-[color:var(--color-line)] bg-[color:var(--color-surface-2)] flex items-center gap-3">
+          <span class="font-mono text-[11px] tracking-[0.06em] text-[color:var(--color-muted-2)] uppercase">Quote ref</span>
+          <span class="font-mono text-sm text-[color:var(--color-ink)]">{p.quoteRef()}</span>
+          <span class="flex-1" />
+          <Pill tone="good" dot={false} size="sm">Sent</Pill>
+        </div>
+        <dl class="grid grid-cols-2 sm:grid-cols-4 gap-y-3 px-5 py-4 text-sm">
+          <div>
+            <dt class="text-[11px] font-mono uppercase tracking-wide text-[color:var(--color-muted)]">Recipient</dt>
+            <dd class="mt-1 font-medium truncate">{recipient()}</dd>
+          </div>
+          <div>
+            <dt class="text-[11px] font-mono uppercase tracking-wide text-[color:var(--color-muted)]">Project</dt>
+            <dd class="mt-1 font-medium truncate" title={p.projectTitle()}>{p.projectTitle()}</dd>
+          </div>
+          <div>
+            <dt class="text-[11px] font-mono uppercase tracking-wide text-[color:var(--color-muted)]">Total</dt>
+            <dd class="mt-1 font-serif font-medium tabular-nums">{fmt(p.total())}</dd>
+          </div>
+          <div>
+            <dt class="text-[11px] font-mono uppercase tracking-wide text-[color:var(--color-muted)]">Line items</dt>
+            <dd class="mt-1 font-mono tabular-nums">{p.lineItemCount()}</dd>
+          </div>
+        </dl>
+        <div class="px-5 pb-4 text-[12px] font-mono text-[color:var(--color-muted)]">
+          {sentAt}
+        </div>
+      </div>
+
+      {/* What happens next */}
+      <section class="mt-6 rounded-xl bg-[color:var(--color-accent-tint)]/40 px-5 py-4">
+        <h3 class="text-eyebrow font-mono uppercase text-[color:var(--color-accent)] mb-3">What happens next</h3>
+        <ul class="space-y-2.5 text-[13.5px] text-[color:var(--color-ink-2)] leading-relaxed">
+          <li class="flex items-start gap-2.5">
+            <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-[color:var(--color-accent)] shrink-0" aria-hidden="true" />
+            <span><strong class="font-medium">Brief watches for opens.</strong> You'll see the timeline tick on the quote detail.</span>
+          </li>
+          <li class="flex items-start gap-2.5">
+            <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-[color:var(--color-accent)] shrink-0" aria-hidden="true" />
+            <span><strong class="font-medium">If it goes 5+ days quiet,</strong> Brief drafts a soft check-in for your review.</span>
+          </li>
+          <li class="flex items-start gap-2.5">
+            <span class="mt-1.5 w-1.5 h-1.5 rounded-full bg-[color:var(--color-accent)] shrink-0" aria-hidden="true" />
+            <span><strong class="font-medium">When they respond,</strong> the Reply drawer opens with a draft grounded in the thread.</span>
+          </li>
+        </ul>
+      </section>
+
+      <div class="mt-7 flex items-center justify-center gap-2 flex-wrap">
+        <Show when={p.quoteId()}>
+          <a
+            href={`/quotes/${p.quoteId()}`}
+            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] text-sm font-medium hover:bg-[color:var(--color-surface-2)]"
+          >
+            View this quote
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+              <path d="M2 5.5h7M6 2l3.5 3.5L6 9" />
+            </svg>
+          </a>
+        </Show>
         <a
           href="/quotes"
           class="inline-flex items-center px-4 py-2 rounded-lg bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] text-sm font-medium hover:bg-[color:var(--color-surface-2)]"
         >
-          View all quotes
+          All quotes
         </a>
         <Button variant="accent" onClick={p.onNewQuote}>New quote</Button>
       </div>
