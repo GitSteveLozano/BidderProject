@@ -11,9 +11,9 @@
  * it inline on /quotes/[id] when state=LOST.
  */
 import type { APIRoute } from 'astro';
-import Anthropic from '@anthropic-ai/sdk';
 
 import { client as supabaseService } from '@/lib/supabase';
+import { generateText } from '@/lib/ai';
 
 export const prerender = false;
 
@@ -56,7 +56,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
   const env = locals.runtime?.env;
   if (!env) return json({ error: 'Cloudflare runtime not available' }, 500);
   if (!locals.user || !locals.membership) return json({ error: 'Not authenticated' }, 401);
-  if (!env.ANTHROPIC_API_KEY) return json({ error: 'ANTHROPIC_API_KEY not configured' }, 500);
+  if (!env.AI) return json({ error: 'Workers AI binding not configured' }, 500);
 
   let body: { quote_id?: string };
   try {
@@ -137,7 +137,6 @@ export const POST: APIRoute = async ({ request, locals }) => {
     n_recent_losses: (recentLosses ?? []).length,
   };
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const userMsg =
     `Loss postmortem facts (authoritative — do not invent numbers):\n\n` +
     `${JSON.stringify(facts.quote)}\n\nCompetitor: ${JSON.stringify(facts.competitor)}\n\n` +
@@ -146,20 +145,20 @@ export const POST: APIRoute = async ({ request, locals }) => {
     `${JSON.stringify(facts.recent_comparable_losses)}\n\n` +
     `Produce the postmortem JSON.`;
 
-  let resp;
+  let text: string;
   try {
-    resp = await client.messages.create({
-      model: env.DEFAULT_MODEL_SONNET ?? 'claude-sonnet-4-6',
+    text = await generateText(env, {
       max_tokens: 1500,
       temperature: 0.2,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMsg }],
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userMsg },
+      ],
     });
   } catch (err) {
     return json({ error: err instanceof Error ? err.message : String(err) }, 500);
   }
 
-  const text = resp.content.map((b) => ('text' in b ? b.text : '')).join('').trim();
   let parsed: any;
   try {
     const fenced = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);

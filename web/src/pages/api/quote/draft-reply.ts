@@ -6,11 +6,15 @@
  * tokens, then { type: 'done' } | { type: 'error', message }.
  *
  * The first user keystroke in the drawer aborts the stream client-side.
+ *
+ * Runs on Cloudflare Workers AI (Llama 3.3 70B by default) — free
+ * under the 10k-neurons/day allowance, no API key required beyond
+ * the AI binding being enabled on the Pages project.
  */
 import type { APIRoute } from 'astro';
-import Anthropic from '@anthropic-ai/sdk';
 
 import { client as supabaseService } from '@/lib/supabase';
+import { streamText } from '@/lib/ai';
 
 export const prerender = false;
 
@@ -21,13 +25,14 @@ reference the project specifics, and end with a single concrete next step.
 
 Length: 3-6 sentences. No subject line in the body. No marketing language.
 Sign off using the shop's boilerplate_closing if present, otherwise just the
-owner's first name.`;
+owner's first name. Return only the body text — no preamble like "Here's the
+reply:".`;
 
 export const POST: APIRoute = async ({ request, locals }) => {
   const env = locals.runtime?.env;
   if (!env) return new Response('Cloudflare runtime not available', { status: 500 });
   if (!locals.user || !locals.membership) return new Response('Not authenticated', { status: 401 });
-  if (!env.ANTHROPIC_API_KEY) return new Response('ANTHROPIC_API_KEY not configured', { status: 500 });
+  if (!env.AI) return new Response('Workers AI binding not configured', { status: 500 });
 
   let body: { quote_id?: string };
   try {
@@ -54,12 +59,11 @@ export const POST: APIRoute = async ({ request, locals }) => {
   const ownerFirst = (shop?.owner_name ?? '').split(' ')[0];
   const closing = shop?.voice_profile?.boilerplate_closing ?? '';
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const encoder = new TextEncoder();
-
   const stream = new ReadableStream({
     async start(controller) {
-      const emit = (event: object) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      const emit = (event: object) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       try {
         emit({ type: 'subject', text: `Re: ${q.project_title}` });
 
@@ -75,16 +79,16 @@ export const POST: APIRoute = async ({ request, locals }) => {
           (closing ? `Closing line to end with: ${closing}\n` : '') +
           `\nWrite the reply.`;
 
-        const model = env.DEFAULT_MODEL_SONNET ?? 'claude-sonnet-4-6';
-        const msg = client.messages.stream({
-          model,
+        for await (const chunk of streamText(env, {
           max_tokens: 600,
           temperature: 0.5,
-          system: SYSTEM,
-          messages: [{ role: 'user', content: userMsg }],
-        });
-        msg.on('text', (text: string) => emit({ type: 'token', text }));
-        await msg.finalMessage();
+          messages: [
+            { role: 'system', content: SYSTEM },
+            { role: 'user', content: userMsg },
+          ],
+        })) {
+          emit({ type: 'token', text: chunk });
+        }
         emit({ type: 'done' });
         controller.close();
       } catch (err) {

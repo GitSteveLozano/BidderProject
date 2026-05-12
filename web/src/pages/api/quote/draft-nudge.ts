@@ -4,12 +4,12 @@
  * Stream a nudge draft for a quote that's gone quiet. The tone scales
  * with `age_days`: under 48h is a soft check-in, 2-5d is direct,
  * 5-10d is final and escalating. See design/agent-port-notes.md for
- * the cadence rules.
+ * the cadence rules. Runs on Cloudflare Workers AI.
  */
 import type { APIRoute } from 'astro';
-import Anthropic from '@anthropic-ai/sdk';
 
 import { client as supabaseService } from '@/lib/supabase';
+import { streamText } from '@/lib/ai';
 
 export const prerender = false;
 
@@ -23,13 +23,13 @@ back. Match the tone parameter exactly:
 
 Length: 3-6 sentences. Never pushy. Never marketing-speak. Never exclamation
 marks. Reference the project specifically. Sign off with the owner's first
-name.`;
+name. Return only the body text — no preamble like "Here's the nudge:".`;
 
 export const POST: APIRoute = async ({ request, locals }) => {
   const env = locals.runtime?.env;
   if (!env) return new Response('Cloudflare runtime not available', { status: 500 });
   if (!locals.user || !locals.membership) return new Response('Not authenticated', { status: 401 });
-  if (!env.ANTHROPIC_API_KEY) return new Response('ANTHROPIC_API_KEY not configured', { status: 500 });
+  if (!env.AI) return new Response('Workers AI binding not configured', { status: 500 });
 
   let body: { quote_id?: string };
   try {
@@ -59,12 +59,11 @@ export const POST: APIRoute = async ({ request, locals }) => {
   const ageHours = (Date.now() - sentAt.getTime()) / (60 * 60 * 1000);
   const tone = ageHours < 48 * 2 ? 'soft' : ageHours < 24 * 7 ? 'direct' : 'final';
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const encoder = new TextEncoder();
-
   const stream = new ReadableStream({
     async start(controller) {
-      const emit = (event: object) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      const emit = (event: object) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       try {
         emit({ type: 'subject', text: `Following up — ${q.project_title}` });
 
@@ -74,15 +73,16 @@ export const POST: APIRoute = async ({ request, locals }) => {
           `Days since sent: ${Math.floor(ageHours / 24)}\n` +
           `Tone: ${tone}\nSign as: ${ownerFirst}\n\nWrite the follow-up.`;
 
-        const msg = client.messages.stream({
-          model: env.DEFAULT_MODEL_SONNET ?? 'claude-sonnet-4-6',
+        for await (const chunk of streamText(env, {
           max_tokens: 600,
           temperature: 0.5,
-          system: SYSTEM,
-          messages: [{ role: 'user', content: userMsg }],
-        });
-        msg.on('text', (text: string) => emit({ type: 'token', text }));
-        await msg.finalMessage();
+          messages: [
+            { role: 'system', content: SYSTEM },
+            { role: 'user', content: userMsg },
+          ],
+        })) {
+          emit({ type: 'token', text: chunk });
+        }
         emit({ type: 'done' });
         controller.close();
       } catch (err) {

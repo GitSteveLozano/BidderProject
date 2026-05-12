@@ -24,7 +24,7 @@ export const GET: APIRoute = async ({ locals }) => {
   const env = locals.runtime?.env ?? ({} as Record<string, string | undefined>);
 
   const envStatus = {
-    ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY ? 'set' : 'missing',
+    AI_binding: env.AI ? 'bound' : 'missing',
     SUPABASE_URL: env.SUPABASE_URL ? 'set' : 'missing',
     SUPABASE_ANON_KEY: env.SUPABASE_ANON_KEY ? 'set' : 'missing',
     SUPABASE_SERVICE_KEY: env.SUPABASE_SERVICE_KEY ? 'set' : 'missing',
@@ -100,7 +100,7 @@ export const GET: APIRoute = async ({ locals }) => {
     envStatus.SUPABASE_URL === 'set' &&
     envStatus.SUPABASE_ANON_KEY === 'set' &&
     envStatus.SUPABASE_SERVICE_KEY === 'set' &&
-    envStatus.ANTHROPIC_API_KEY === 'set' &&
+    envStatus.AI_binding === 'bound' &&
     supabase.ok &&
     (supabase.shops_count ?? 0) > 0 &&
     nodeCompat === 'yes';
