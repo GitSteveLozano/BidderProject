@@ -25,10 +25,11 @@ export interface CloudflareEnv {
   AI?: {
     run: (model: string, input: unknown) => Promise<unknown>;
   };
-  // Outbound delivery — Resend (email) + Twilio (SMS). Optional;
+  // Outbound delivery — Brevo (email) + Twilio (SMS). Optional;
   // endpoints fall back to "record intent only" when these aren't set.
-  RESEND_API_KEY?: string;
-  RESEND_FROM_ADDRESS?: string;       // e.g. "Brief <quotes@brief.app>"
+  BREVO_API_KEY?: string;
+  BREVO_FROM_EMAIL?: string;          // e.g. "you@gmail.com" (verified sender)
+  BREVO_FROM_NAME?: string;           // e.g. "Brief"
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
   TWILIO_FROM_NUMBER?: string;        // e.g. "+18085551234"

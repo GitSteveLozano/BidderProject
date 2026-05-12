@@ -1,5 +1,5 @@
 /**
- * Outbound delivery — Resend (email) + Twilio (SMS).
+ * Outbound delivery — Brevo (email) + Twilio (SMS).
  *
  * Each `sendX` helper returns a `DeliveryResult` rather than throwing,
  * so the API endpoint that called it can record the outcome without
@@ -8,13 +8,17 @@
  * report `{ ok: false, kind: 'unconfigured' }` and the caller can
  * decide how to handle it (typically: keep the "marked sent" path so
  * the operator can still deliver manually).
+ *
+ * Brevo was picked over Resend because it allows a single verified
+ * sender email (Gmail, etc.) on the free tier — no domain purchase.
+ * 300 emails/day on free.
  */
 import type { CloudflareEnv } from './supabase';
 
 export type DeliveryFailureKind = 'unconfigured' | 'invalid_input' | 'provider_error';
 
 export type DeliveryResult =
-  | { ok: true; provider: 'resend' | 'twilio'; id: string }
+  | { ok: true; provider: 'brevo' | 'twilio'; id: string }
   | { ok: false; kind: DeliveryFailureKind; message: string };
 
 interface EmailInput {
@@ -25,33 +29,41 @@ interface EmailInput {
 }
 
 export async function sendEmail(env: CloudflareEnv, input: EmailInput): Promise<DeliveryResult> {
-  if (!env.RESEND_API_KEY || !env.RESEND_FROM_ADDRESS) {
-    return { ok: false, kind: 'unconfigured', message: 'Resend not configured' };
+  if (!env.BREVO_API_KEY || !env.BREVO_FROM_EMAIL) {
+    return { ok: false, kind: 'unconfigured', message: 'Brevo not configured' };
   }
   if (!input.to.includes('@')) {
     return { ok: false, kind: 'invalid_input', message: `Invalid recipient: ${input.to}` };
   }
 
-  const resp = await fetch('https://api.resend.com/emails', {
+  const sender: Record<string, string> = { email: env.BREVO_FROM_EMAIL };
+  if (env.BREVO_FROM_NAME) sender.name = env.BREVO_FROM_NAME;
+
+  const payload: Record<string, unknown> = {
+    sender,
+    to: [{ email: input.to }],
+    subject: input.subject,
+    textContent: input.text,
+  };
+  if (input.reply_to) {
+    payload.replyTo = { email: input.reply_to };
+  }
+
+  const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'api-key': env.BREVO_API_KEY,
       'content-type': 'application/json',
+      accept: 'application/json',
     },
-    body: JSON.stringify({
-      from: env.RESEND_FROM_ADDRESS,
-      to: input.to,
-      reply_to: input.reply_to,
-      subject: input.subject,
-      text: input.text,
-    }),
+    body: JSON.stringify(payload),
   });
   if (!resp.ok) {
     const body = await resp.text();
-    return { ok: false, kind: 'provider_error', message: `Resend ${resp.status}: ${body}` };
+    return { ok: false, kind: 'provider_error', message: `Brevo ${resp.status}: ${body}` };
   }
-  const data = (await resp.json()) as { id?: string };
-  return { ok: true, provider: 'resend', id: data.id ?? 'unknown' };
+  const data = (await resp.json()) as { messageId?: string };
+  return { ok: true, provider: 'brevo', id: data.messageId ?? 'unknown' };
 }
 
 interface SmsInput {
