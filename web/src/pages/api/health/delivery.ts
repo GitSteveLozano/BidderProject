@@ -2,14 +2,16 @@
  * GET /api/health/delivery
  *
  * One-shot diagnostic for the outbound providers. Hits the metadata
- * endpoint on each (Brevo /v3/account, Twilio /Accounts/{sid}.json) —
- * verifies the API key is valid + reachable without actually sending
- * a message. Also surfaces whether BREVO_FROM_EMAIL is among the
- * account's verified senders so a misconfigured "from" doesn't bite
- * us at send time.
+ * endpoint on each (Brevo /v3/account + /v3/senders, Twilio
+ * /Accounts/{sid}.json) — verifies the API key is valid + reachable
+ * without actually sending a message. Also surfaces whether
+ * BREVO_FROM_EMAIL is among the account's verified senders so a
+ * misconfigured "from" doesn't bite us at send time.
  *
  * Gated to authenticated owners/admins so we don't leak provider
- * status publicly.
+ * status publicly. Response shape:
+ *   { brevo:  { configured, ok, detail },
+ *     twilio: { configured, ok, detail } }
  */
 import type { APIRoute } from 'astro';
 
