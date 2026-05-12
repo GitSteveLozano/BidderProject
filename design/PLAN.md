@@ -29,19 +29,26 @@ Called out so they don't get pulled in accidentally:
 
 Seven PRs. Each is independently mergeable except for the noted dependencies. Branch names use `claude/brief-NN-<slug>`.
 
-### PR 1 — schema (`claude/brief-01-schema`)
+### PR 1 — schema + Python deletion + Brief baseline (`claude/brief-01-schema`)
 
 **What:** Blow-away migration. New `db/migrations/001_brief_schema.sql` matching `design/spec/data-shapes.md`. Drops legacy tables (`companies`, `voice_patterns`, `service_lines`, `bids`, `employees`, `burden_components`, `schedule_allocations`, `intelligence_insights`, etc.) and replaces with: `shops`, `memberships`, `invites`, `clients`, `quotes`, `quote_line_items`, `quote_messages`, `jobs`, `job_cost_lines`, `events`. RLS policies on every tenant table scoped to `auth.uid() → shop_id` via `memberships`. New seed script `db/seed_brief.sql` producing 1 shop + 2 clients + 6 quotes + 2 jobs for demos.
 
-**Files:** `db/migrations/001_brief_schema.sql` (new), `db/seed_brief.sql` (new), `db/schema.sql` (delete or archive — TBD; safer to leave a deprecation note pointing at the migration), README pointer.
+Same PR deletes the orphaned Python tree (`agents/`, `tools/`, `api/`, `cli.py`, `streamlit_app.py`, `tests/`, `db/seed*.py`, `db/schema.sql`, `db/seed_supabase.sql`, `db/ingest_corpus.py`, `db/migrate.py`, `db/seed_data/`, `Dockerfile`, `docker-compose.yml`, `pyproject.toml`, `requirements.txt`, `.streamlit/`, `data/`). Before deletion, `design/agent-port-notes.md` captures the prompts, tool shapes, and pricing/cadence math worth reincarnating in TypeScript so the 5-layer/8-agent ideas (intake, context, pricing, composition, follow-up, jcr, intelligence, postmortem) survive even though the runtime doesn't.
+
+Also: rewrite `README.md` for Brief; gut `.github/workflows/ci.yml` to drop Python tests and add a `web/` build check; rewire `web/src/pages/api/health.ts` to probe the new tables; drop the `db/migrate.py` reference from `justfile` (delete `justfile` if Python-only).
+
+**Files (new):** `design/agent-port-notes.md`, `db/migrations/001_brief_schema.sql`, `db/seed_brief.sql`, `README.md` (rewrite), `.github/workflows/ci.yml` (rewrite).
+**Files (modified):** `web/src/pages/api/health.ts`.
+**Files (deleted):** the Python tree above + legacy DB scripts + Docker + Python infra.
 
 **Risks:**
-- Python-side code (`agents/`, `tools/`, `api/`) still imports from old tables. Either (a) freeze the Python side and let it break until later cleanup, or (b) drop the old schema *and* delete the Python agents in this PR. I lean (a) — keeps PR 1 reviewable.
-- RLS policies are easy to get wrong. Include a test: every policy proved by SQL fixtures that show a different-shop user gets 0 rows.
+- RLS policies are easy to get wrong. Include a test: SQL fixtures showing a different-shop user gets 0 rows on every tenant table.
+- The current `/api/health` checks `companies` — won't pass against the new schema until the rewire lands in this same PR. Verify locally with `npm run preview` against a Supabase project that has the migration applied.
+- Deleting `tests/` removes ~3k lines of Python pytest. CI will be faster but anyone reading git history won't see what those tests were for — `design/agent-port-notes.md` lists which behaviors mattered and need new web tests later.
 
-**Out:** Any UI work. Any auth wiring. Just schema + seed + RLS.
+**Out:** Any UI work. Any auth wiring. Tokens. Just schema + seed + RLS + Python burndown + port notes.
 
-**Size:** Medium (~400 LOC SQL, 2–3 hours).
+**Size:** Medium-large (~500 LOC new SQL + port notes + ~4k LOC deletions, half a day).
 
 ---
 
@@ -74,7 +81,7 @@ Seven PRs. Each is independently mergeable except for the noted dependencies. Br
 
 **What:**
 1. **Supabase Auth** wired up with Google OAuth provider. Callback handler at `/auth/callback`. Session cookie config tuned for Cloudflare Pages (SameSite, Secure, domain).
-2. **Onboarding** at `/onboarding`, 7-step. New route. Gated by `shops.data_state === 'cold-start' && !onboarding_completed_at`. Includes Google sign-in (step 1), voice upload (step 2 — uses Supabase Storage + `/api/voice/analyze` SSE endpoint stub returning hand-rolled events for now), license lookup (step 3 — `/api/license/lookup` stubbed for CSLB only), profile review (step 4–5), defaults (step 6), Calendar Pattern A consent (step 7 — `POST /api/integrations/google-calendar/connect`).
+2. **Onboarding** at `/onboarding`, 7-step. New route. Gated by `shops.data_state === 'cold-start' && !onboarding_completed_at`. Includes Google sign-in (step 1), voice upload (step 2 — uses Supabase Storage + `/api/voice/analyze` with real Claude tool-use streaming), license lookup (step 3 — `/api/license/lookup` stubbed for CSLB only), profile review (step 4–5), defaults (step 6), Calendar Pattern A consent (step 7 — `POST /api/integrations/google-calendar/connect`).
 3. **Self-serve company creation:** first sign-in without an invite token creates a `shops` row + `memberships` row with `role='owner'`. Invite token flow boilerplate; full invite UI ships with Settings.
 4. **Auth middleware/guard:** every SSR page checks for a session; unauthenticated redirects to `/auth/signin`. `/`, `/auth/*`, `/onboarding/welcome` stay public.
 5. **Settings** at `/settings`, sections: Account, Shop & license, Pricing defaults, Connected services, Branding, Notifications, Data export. Integration connect/disconnect flows (Google Calendar, ProService API key, QuickBooks/DocuSign/Drive OAuth stubs).
@@ -84,9 +91,9 @@ Seven PRs. Each is independently mergeable except for the noted dependencies. Br
 
 **Risks:**
 - **Middleware reverted last time** for breaking SSR (`9efe16d`). Re-introduce carefully — only run on `Astro.url.pathname.startsWith('/...')` and don't clone the response. Test against the prior failure mode.
-- **Google Cloud verification** for sensitive scopes (Calendar `https://www.googleapis.com/auth/calendar`) takes weeks. Start the paperwork the day this PR opens.
+- **Google Cloud verification** for sensitive scopes (Calendar `https://www.googleapis.com/auth/calendar`) takes weeks. Test-mode (≤100 users) is sufficient for v1; start the paperwork in parallel for later.
 - **Token refresh** — Google access tokens expire in 1hr. Store `refresh_token` on `shops`; refresh server-side per request. Per-shop, not per-user, in v1 (single owner).
-- **Voice analysis endpoint** can't fully ship until we wire Claude tool-use; v1 returns plausible fake events via SSE so the UX exists. Real Claude integration in PR 4.
+- **Voice analysis** ships with real Claude integration in this PR (no stub) — uses Claude tool-use streaming with one tool call per signal (vocabulary, tone, formatting).
 
 **Size:** Large (auth + 2 new routes + 5 new endpoints, 1–2 days).
 
@@ -109,7 +116,7 @@ Seven PRs. Each is independently mergeable except for the noted dependencies. Br
 **Risks:**
 - **Streaming SSR is off** — make sure the page shell renders fully before any client work. Step-1 cards must be in the SSR'd HTML.
 - **SSE reconnection** — if the connection drops mid-stream, the client picks up where it stopped (per `empty-states.md`). Server must accept a `resume_from_idx` parameter.
-- **PDF rendering on Cloudflare Workers** — no `puppeteer`. Options: (a) Cloudflare Browser Rendering (paid, new); (b) `@react-pdf/renderer` (works in Workers, less faithful); (c) `pdf-lib` (lowest-level, most work). Decision deferred to this PR's planning.
+- **PDF rendering — `@react-pdf/renderer`** ✓. Adds ~1MB to the Workers bundle (within Pages limits); ~250 LOC declarative JSX vs ~800 hand-positioned for pdf-lib; auto page breaks for the line items table; custom Newsreader+Geist embedding via `Font.register`. Worth the bundle weight for a deliverable PDF.
 - **Claude tool-use cost per quote** — streaming line items multiplies per-call cost. Cache the scope-doc analysis; only re-stream on changes.
 
 **Size:** Large (5-step flow + 3 API routes + PDF, 2 days).
@@ -121,15 +128,13 @@ Seven PRs. Each is independently mergeable except for the noted dependencies. Br
 **Depends on:** PRs 1 + 2 + 3.
 
 **What:**
-1. **`/bids` full redesign:** default Agenda view (chronological action groups: Today / This week / Cooling off / Later / Decided), with a Table view tab. Pipeline value strip across the top. Drops the previous kanban.
+1. **`/bids` → `/quotes` rename + full redesign:** default Agenda view (chronological action groups: Today / This week / Cooling off / Later / Decided), with a Table view tab. Pipeline value strip across the top. Drops the previous kanban. Add a 301 redirect from `/bids` for any external links.
 2. **Reply/Nudge slide-over drawers.** Open from any row's action button. Both use SSE — `POST /api/quote/draft-reply` and `POST /api/quote/draft-nudge` stream the draft body line-by-line. First user keystroke aborts the stream. "Best time to send" chip computed server-side from Google Calendar busy times.
 3. **Quote messages thread** persisted in `quote_messages` (from PR 1 schema).
 4. **New route `/quotes/[id]`:** quote detail. Header (client, ref, state pill, total) + line items table + sidebar (activity feed + files). Inline line-item edit (Solid island). Clone-to-new-quote.
 5. **`<ActivityFeed />`** primitive (vertical `<ol>` of typed events with relative timestamps).
 
-**Files:** `web/src/pages/bids.astro` (full rewrite — rename to `quotes.astro`? screens.md keeps `/bids`; verify intent — defaulting to renaming since "Quotes" is the brand label), `web/src/components/quotes/*.tsx` (AgendaGroup, AgendaRow, PipelineStrip, ReplyDrawer, NudgeDrawer), `web/src/pages/quotes/[id].astro` (new), `web/src/components/quotes/QuoteDetail.tsx`, `web/src/pages/api/quote/draft-reply.ts`, `web/src/pages/api/quote/draft-nudge.ts`, `web/src/pages/api/quote/message.ts`, `web/src/pages/api/quote/best-send-time.ts`.
-
-**Open question for user:** rename route from `/bids` to `/quotes`? Designs say "Quotes" everywhere in copy. Mechanically the route name is independent of the label; keeping `/bids` is fine. Recommending rename for consistency with the rest of the URL space (`/quotes/[id]`).
+**Files:** `web/src/pages/quotes/index.astro` (new — replaces `bids.astro`), `web/src/pages/bids.astro` (replaced with redirect), `web/src/components/quotes/*.tsx` (AgendaGroup, AgendaRow, PipelineStrip, ReplyDrawer, NudgeDrawer), `web/src/pages/quotes/[id].astro` (new), `web/src/components/quotes/QuoteDetail.tsx`, `web/src/pages/api/quote/draft-reply.ts`, `web/src/pages/api/quote/draft-nudge.ts`, `web/src/pages/api/quote/message.ts`, `web/src/pages/api/quote/best-send-time.ts`.
 
 **Risks:**
 - **Calendar API rate limits** — `best-send-time` for every drawer-open is hot. Cache per-user free/busy for 60s.
@@ -144,13 +149,11 @@ Seven PRs. Each is independently mergeable except for the noted dependencies. Br
 **Depends on:** PRs 1 + 2 + 3.
 
 **What:**
-1. **`/jcr` full redesign as `/jobs`:** split layout (list left, detail right). `<CostReconciliation />` table — variance colors per `tokens.md`. Manual cost entry inline. ProService payroll sync banner (just status display in v1; cron lands later).
+1. **`/jcr` → `/jobs` rename + full redesign:** split layout (list left, detail right). `<CostReconciliation />` table — variance colors per `tokens.md`. Manual cost entry inline. ProService payroll sync banner (just status display in v1; cron lands later). Add 301 redirect from `/jcr`.
 2. **New `/clients` route:** sortable client table, detail right-rail, auto-create flow (clients auto-add when quotes are sent — covered by PR 4 schema usage).
-3. **`/insights` full redesign as `/dashboard`:** KPI tiles (`<MetricCard />`), `<PipelineFunnel />` SVG, `<CapacityGauge />`, last-10-events feed. Click-through navigation to filtered list views. Per `empty-states.md`: cold-start, calibrating, calibrated treatments.
+3. **`/insights` → `/dashboard` rename + full redesign:** KPI tiles (`<MetricCard />`), `<PipelineFunnel />` SVG, `<CapacityGauge />`, last-10-events feed. Click-through navigation to filtered list views. Per `empty-states.md`: cold-start, calibrating, calibrated treatments. Add 301 redirect from `/insights`.
 
-**Files:** `web/src/pages/jobs.astro` (new route name; `web/src/pages/jcr.astro` archived/redirected), `web/src/components/jobs/CostReconciliation.tsx`, `web/src/pages/clients.astro` + island, `web/src/pages/dashboard.astro` (renamed from `insights.astro`), `web/src/components/dashboard/{PipelineFunnel,CapacityGauge,ActivityPolling}.tsx`.
-
-**Open question for user:** rename `/jcr` → `/jobs`, `/insights` → `/dashboard`? Designs use Jobs/Dashboard labels; URLs follow. Same logic as `/bids` → `/quotes`.
+**Files:** `web/src/pages/jobs.astro` (new), `web/src/pages/jcr.astro` (redirect), `web/src/components/jobs/CostReconciliation.tsx`, `web/src/pages/clients.astro` + island, `web/src/pages/dashboard.astro` (new), `web/src/pages/insights.astro` (redirect), `web/src/components/dashboard/{PipelineFunnel,CapacityGauge,ActivityPolling}.tsx`.
 
 **Risks:**
 - **Polling vs WebSocket** on dashboard activity — designs say polling at 60s. Fine.
@@ -171,7 +174,7 @@ Seven PRs. Each is independently mergeable except for the noted dependencies. Br
 4. **A11y sweep:** every icon-only button has `aria-label`; status pills have `aria-label`; SSE-driven surfaces have `aria-live="polite"` regions; modal/drawer focus traps verified.
 5. **Mobile breakpoints** validated against `mockups/mobile-*.png`. Sidebar collapses to bottom tab bar < 880px (per `styles.css` media query).
 6. **Per-page `no-store` headers** confirmed on every SSR page (carried over from current `bids.astro` pattern).
-7. **The `/bids?diag=1` probe** stays as a permanent regression tripwire (`x-ssr-build-tag` header). Update its tag value to reflect the new build identity.
+7. **The `/bids?diag=1` probe** — relocate to `/quotes?diag=1` after the route rename. Stays as a permanent regression tripwire (`x-ssr-build-tag` header). Update the tag value to reflect the new build identity.
 
 **Files:** Spot edits across the redesigned pages; one new DB function/trigger for `data_state`; toggle UI in Settings.
 
@@ -182,20 +185,20 @@ Seven PRs. Each is independently mergeable except for the noted dependencies. Br
 ## Cross-cutting / what NOT to forget
 
 - **Adapter patch (`scripts/patch-cf-streaming.mjs`)** stays as-is. Every PR's build will continue running it post-`astro build`. Don't remove unless `@astrojs/cloudflare` ships a `streaming: false` option.
-- **`web/src/pages/postmortem.astro`** is explicitly out of scope. Leave it alone. Sidebar nav drops the "Postmortem" link entirely.
-- **Existing Python `agents/`, `tools/`, `api/` directories** — not touched in any of these PRs. They're orphan code after PR 1 lands the new schema. Either delete in a follow-on cleanup PR or leave for a v2 cleanup.
-- **The `/api/health` endpoint** keeps working — update it to check the new tables instead of old ones in PR 1.
-- **Existing `/api/bids/postmortem`** stays. Maps to the legacy data, which won't exist post-PR-1, so this endpoint will silently 404 against the new schema. Acceptable since postmortem is out of scope.
+- **`web/src/pages/postmortem.astro`** stays — design handoff omits it but the route + endpoint remain functional pending a future redesign. Sidebar nav drops the "Postmortem" link in PR 2 (it's no longer in the design's nav).
+- **Python `agents/`, `tools/`, `api/`** — **deleted in PR 1**. `design/agent-port-notes.md` is the persistent record of what to reimplement in TypeScript.
+- **`/api/health`** — rewired to the new tables in PR 1 (or it will fail). Keeps the `cf-cache-status`/diagnostic shape that's been useful so far.
+- **`/api/bids/generate`** + **`/api/bids/postmortem`** — generate is deleted by PR 4 (replaced by `/api/quote/scan` etc.); postmortem stays. Postmortem will read against the legacy `bids` table which no longer exists after PR 1, so the endpoint will return 500s until a future postmortem redesign — acceptable, it's out of scope.
 - **Custom domain / Cloudflare Pages settings** unchanged.
-- **`web/src/components/BidGenerator.tsx`** and **`PostmortemRunner.tsx`** — `BidGenerator` is deleted by PR 4 (replaced by 5-step islands); `PostmortemRunner` stays untouched.
+- **`web/src/components/BidGenerator.tsx`** is deleted by PR 4 (replaced by 5-step islands). **`PostmortemRunner.tsx`** stays untouched.
 
-## Open questions for user
+## Open questions for user — **resolved**
 
-1. **Route renames** — rename `/bids`→`/quotes`, `/jcr`→`/jobs`, `/insights`→`/dashboard` to match design copy? Recommending yes. Confirms naming consistency across the codebase but each rename is a redirect entry. (PRs 5 + 6)
-2. **PDF rendering approach** for `/api/quote/render-pdf` — Cloudflare Browser Rendering (paid, faithful), `@react-pdf/renderer` (free, less faithful), or `pdf-lib` (lowest-level)? (PR 4)
-3. **Python `agents/`** — delete in PR 1 alongside the schema swap, or leave as orphaned code until a v2 cleanup pass? I lean leave until we're sure nothing's salvageable.
-4. **Google Cloud OAuth verification** — who's filing the Calendar scope verification with Google? It can run in parallel to the build; the app works in test-mode with up to 100 users in the meantime. (PR 3)
-5. **Real-vs-stub** — the voice-analyze endpoint in PR 3 ships with mocked SSE events to make the UX exist. Real Claude integration follows in a small follow-on. Confirm.
+1. **Route renames** — `/bids`→`/quotes`, `/jcr`→`/jobs`, `/insights`→`/dashboard`. ✓ Confirmed. PRs 5 + 6 do the rename + redirect.
+2. **PDF rendering** — `@react-pdf/renderer`. ✓ Confirmed (user delegated to engineering recommendation).
+3. **Python `agents/`** — delete in PR 1. Before deletion, write `design/agent-port-notes.md` distilling the math/prompts/tool-shapes worth reincarnating in TypeScript so the agent ideas (intake, pricing, composition, follow-up, jcr, intelligence, postmortem) survive even though the runtime doesn't. ✓ Confirmed.
+4. **Google OAuth verification** — test mode (≤100 users) is fine while production verification pends. ✓ Confirmed.
+5. **Voice-analyze endpoint** — ship with real Claude integration on day one. No SSE stub. PR 3 includes the real `/api/voice/analyze` using Claude tool-use streaming. ✓ Confirmed.
 
 ## Estimated total
 
