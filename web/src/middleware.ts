@@ -33,7 +33,15 @@ const PUBLIC_PATHS = new Set<string>([
 // cookie exists). Must bypass the auth gate or the redirect to
 // /auth/signin turns the JSON contract into HTML and the client-side
 // parser explodes.
-const PUBLIC_PREFIXES = ['/_astro/', '/_image', '/api/auth/'];
+//
+// /q/ is the public quote-view page (client-facing, no login).
+// /api/quote/*/track-open is the 1x1 tracking pixel that fires from
+// email clients with no session.
+const PUBLIC_PREFIXES = ['/_astro/', '/_image', '/api/auth/', '/q/'];
+
+/** Routes matched by suffix rather than prefix. Currently just the
+ * tracking-open pixel which lives at /api/quote/[id]/track-open. */
+const PUBLIC_SUFFIXES = ['/track-open'];
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const url = new URL(context.request.url);
@@ -61,6 +69,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
   const isPublic =
     PUBLIC_PATHS.has(url.pathname) ||
     PUBLIC_PREFIXES.some((p) => url.pathname.startsWith(p)) ||
+    PUBLIC_SUFFIXES.some((s) => url.pathname.endsWith(s)) ||
     url.searchParams.get('diag') === '1';
 
   if (!isPublic && !context.locals.user) {

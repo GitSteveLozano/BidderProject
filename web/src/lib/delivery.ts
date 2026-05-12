@@ -26,6 +26,10 @@ interface EmailInput {
   reply_to?: string;
   subject: string;
   text: string;
+  /** Optional HTML body. When set, Brevo delivers a multipart message
+   * with both text and HTML and most clients render the HTML. Used by
+   * /api/quote/send to ship a Call-To-Action button + tracking pixel. */
+  html?: string;
 }
 
 export async function sendEmail(env: CloudflareEnv, input: EmailInput): Promise<DeliveryResult> {
@@ -45,6 +49,7 @@ export async function sendEmail(env: CloudflareEnv, input: EmailInput): Promise<
     subject: input.subject,
     textContent: input.text,
   };
+  if (input.html) payload.htmlContent = input.html;
   if (input.reply_to) {
     payload.replyTo = { email: input.reply_to };
   }

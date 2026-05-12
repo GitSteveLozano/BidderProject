@@ -1,0 +1,316 @@
+---
+/**
+ * GET /q/[id] — public quote view (no auth).
+ *
+ * The Brevo "here's your quote" email links here so the recipient can
+ * actually read it. UUIDs are 128-bit random so the URL itself acts as
+ * a soft access token; we still scope queries to non-DRAFT states so a
+ * preview-stage quote never leaks.
+ *
+ * Loading the page records a `quote.opened` event with source:'page'.
+ * The /api/quote/[id]/track-open pixel handles the email-open signal
+ * separately.
+ */
+import { client as supabaseService } from '@/lib/supabase';
+import { fmtCurrencyFull } from '@/lib/quote-helpers';
+
+export const prerender = false;
+Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
+
+const env = Astro.locals.runtime?.env;
+const id = Astro.params.id;
+if (!env || !id) return Astro.redirect('/');
+
+const svc = supabaseService(env, 'service');
+const { data: quote } = await svc
+  .from('quotes')
+  .select(
+    'id, ref, state, client_name, client_contact_name, project_title, project_address, scope_summary, total, margin_pct, sent_at, shop_id, quote_line_items(id, position, description, qty, unit, unit_price, subtotal)',
+  )
+  .eq('id', id)
+  .neq('state', 'DRAFT')
+  .maybeSingle();
+
+if (!quote) {
+  Astro.response.status = 404;
+  return Astro.redirect('/');
+}
+
+const { data: shop } = await svc
+  .from('shops')
+  .select('legal_name, trade_name, owner_name, owner_email, license_number, license_jurisdiction, license_classification')
+  .eq('id', quote.shop_id)
+  .maybeSingle();
+
+const lineItems = (quote.quote_line_items ?? []).sort(
+  (a: any, b: any) => a.position - b.position,
+);
+
+const shopLabel = shop?.trade_name || shop?.legal_name || 'Your contractor';
+
+// Fire quote.opened (source: page). We don't dedupe — the dashboard
+// folds duplicates into a Set on quote_id anyway, and per-open
+// timestamps are useful as engagement signal.
+await svc.from('events').insert({
+  shop_id: quote.shop_id,
+  quote_id: quote.id,
+  type: 'quote.opened',
+  actor: 'client',
+  payload: { source: 'page', user_agent: Astro.request.headers.get('user-agent') ?? null },
+});
+
+const sentDate = quote.sent_at
+  ? new Date(quote.sent_at).toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    })
+  : null;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{quote.project_title} · {shopLabel}</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" />
+    <style>
+      :root {
+        --bg: #f7f1e8;
+        --surface: #fffaf2;
+        --surface-2: #f0e7d6;
+        --ink: #1f1a14;
+        --ink-2: #3f372d;
+        --muted: #6e6253;
+        --muted-2: #9b8d7c;
+        --line: #e5d9c3;
+        --line-2: #d0c2a5;
+        --accent: #a85432;
+        --accent-tint: #f0d7c8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: 'Newsreader', Georgia, serif;
+        background: var(--bg);
+        color: var(--ink);
+        font-size: 16px;
+        line-height: 1.55;
+      }
+      .frame {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 48px 24px 64px;
+      }
+      header.shop {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        padding-bottom: 18px;
+        border-bottom: 1px solid var(--line);
+        margin-bottom: 28px;
+      }
+      .shop-name {
+        font-family: 'Geist', system-ui, sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--ink-2);
+      }
+      .shop-meta {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11.5px;
+        color: var(--muted);
+        margin-left: auto;
+      }
+      .eyebrow {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted-2);
+        margin-bottom: 6px;
+      }
+      h1 {
+        font-family: 'Newsreader', serif;
+        font-weight: 500;
+        font-size: 32px;
+        line-height: 1.1;
+        margin: 0 0 6px;
+        letter-spacing: -0.01em;
+      }
+      .client {
+        font-family: 'Newsreader', serif;
+        font-style: italic;
+        color: var(--muted);
+        margin: 0 0 18px;
+      }
+      .address {
+        font-family: 'Geist Mono', monospace;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 28px;
+      }
+      .scope-card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 20px 22px;
+        margin-bottom: 26px;
+      }
+      .scope-card h3 {
+        font-family: 'Geist Mono', monospace;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin: 0 0 10px;
+      }
+      .scope-card p {
+        margin: 0;
+        font-family: 'Newsreader', serif;
+        font-size: 15px;
+        line-height: 1.6;
+        color: var(--ink-2);
+      }
+      .lines {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 24px;
+      }
+      .lines header {
+        padding: 14px 22px;
+        border-bottom: 1px solid var(--line);
+        font-family: 'Geist', sans-serif;
+        font-weight: 500;
+      }
+      table { width: 100%; border-collapse: collapse; }
+      th {
+        font-family: 'Geist Mono', monospace;
+        font-size: 10.5px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        background: var(--surface-2);
+        padding: 10px 14px;
+        text-align: left;
+      }
+      th.num { text-align: right; }
+      td {
+        padding: 12px 14px;
+        border-top: 1px solid var(--line);
+        font-family: 'Geist', sans-serif;
+        font-size: 14px;
+      }
+      td.num {
+        text-align: right;
+        font-family: 'Geist Mono', monospace;
+        font-variant-numeric: tabular-nums;
+      }
+      tr.total td {
+        border-top: 2px solid var(--ink);
+        background: var(--surface-2);
+        font-weight: 500;
+      }
+      tr.total td.amount {
+        font-family: 'Newsreader', serif;
+        font-size: 20px;
+        font-weight: 500;
+      }
+      .signoff {
+        margin-top: 38px;
+        padding-top: 22px;
+        border-top: 1px solid var(--line);
+        font-family: 'Newsreader', serif;
+        font-style: italic;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+      .signoff strong { font-style: normal; color: var(--ink-2); font-weight: 500; }
+      .footer-meta {
+        margin-top: 28px;
+        font-family: 'Geist Mono', monospace;
+        font-size: 10.5px;
+        color: var(--muted-2);
+        text-align: center;
+      }
+      .footer-meta a { color: var(--accent); text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <header class="shop">
+        <span class="shop-name">{shopLabel}</span>
+        {shop?.license_number && (
+          <span class="shop-meta">
+            License {shop.license_number}{shop.license_jurisdiction ? ` (${shop.license_jurisdiction})` : ''}
+          </span>
+        )}
+      </header>
+
+      <div class="eyebrow">
+        Quote {quote.ref}
+        {sentDate && ` · ${sentDate}`}
+      </div>
+      <h1>{quote.project_title}</h1>
+      <p class="client">Prepared for {quote.client_contact_name || quote.client_name}.</p>
+      {quote.project_address && (
+        <div class="address">{quote.project_address}</div>
+      )}
+
+      {quote.scope_summary && (
+        <div class="scope-card">
+          <h3>Scope</h3>
+          <p>{quote.scope_summary}</p>
+        </div>
+      )}
+
+      <div class="lines">
+        <header>Line items</header>
+        <table>
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th class="num">Qty</th>
+              <th class="num">Unit</th>
+              <th class="num">Subtotal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lineItems.map((li: any) => (
+              <tr>
+                <td>{li.description}</td>
+                <td class="num">{Number(li.qty).toLocaleString()}</td>
+                <td class="num">{li.unit ?? ''}</td>
+                <td class="num">{fmtCurrencyFull(Number(li.subtotal))}</td>
+              </tr>
+            ))}
+            <tr class="total">
+              <td colspan="3">Total</td>
+              <td class="num amount">{fmtCurrencyFull(Number(quote.total))}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="signoff">
+        Reply to this email or call us back any time with questions. Looking forward to it.
+        <br/><br/>
+        <strong>— {shop?.owner_name ?? shopLabel}</strong>
+      </p>
+
+      <div class="footer-meta">
+        Powered by Brief · {quote.ref}
+      </div>
+    </div>
+    {/* Tracking pixel — fires server-side so client-side scripts can't be blocked. */}
+    <img src={`/api/quote/${quote.id}/track-open?from=page`} width="1" height="1" alt="" style="position:absolute;opacity:0" />
+  </body>
+</html>
