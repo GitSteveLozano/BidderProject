@@ -71,26 +71,88 @@ const eventLabels: Record<string, string> = {
   ownerRole={membership.role.charAt(0).toUpperCase() + membership.role.slice(1)}
   dataState={shop?.data_state ?? 'cold-start'}
 >
-  <a href="/quotes" class="text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)]">
-    ← All quotes
+  <a href="/quotes" class="text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)] inline-flex items-center gap-1">
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 2.5L3.5 6l4 3.5" /></svg>
+    Back to <span class="font-medium ml-0.5">quotes</span>
   </a>
 
   <div class="mt-4 grid grid-cols-[1fr_320px] gap-8">
     <div>
-      <div class="flex items-center gap-3 text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-        <span class="font-medium tracking-[0.08em]">{quote.ref}</span>
+      {/* Header row — ref + status + relationship | right-aligned total + margin + likely */}
+      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span class="font-mono text-[12px] tracking-[0.06em] text-[color:var(--color-muted)]">{quote.ref}</span>
         <StatusPill state={quote.state} size="sm" />
-        <span class="italic font-serif text-[color:var(--color-muted)]">
-          {quote.relationship ?? 'new'} client
-        </span>
+        {quote.relationship && (
+          <span class="text-[13px] italic font-serif text-[color:var(--color-muted)]">
+            · {quote.relationship} client
+          </span>
+        )}
+        <div class="flex-1" />
+        <div class="text-right">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">Total</div>
+          <div class="font-serif text-[28px] font-medium tabular-nums leading-none mt-0.5">
+            {fmtCurrencyFull(Number(quote.total))}
+          </div>
+          {quote.margin_pct != null && (
+            <div class="text-[12px] text-[color:var(--color-muted)] mt-1 font-mono">
+              {Number(quote.margin_pct).toFixed(0)}% margin
+            </div>
+          )}
+        </div>
       </div>
-      <h1 class="mt-2 font-serif text-[32px] font-medium leading-tight">
+
+      <h1 class="mt-3 font-serif text-[32px] font-medium leading-tight">
         {quote.client_name}
       </h1>
-      <p class="mt-1 text-[color:var(--color-muted)] text-sm">
+      <p class="mt-1 text-[15px] font-serif text-[color:var(--color-ink-2)]">
         {quote.project_title}
-        {quote.project_address ? ` · ${quote.project_address}` : ''}
       </p>
+
+      <!-- Contact + location + sent meta strip -->
+      <div class="mt-2 flex flex-wrap gap-4 text-[12.5px] text-[color:var(--color-muted)]">
+        {quote.project_address && (
+          <span class="inline-flex items-center gap-1.5">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M6 11s4-3.5 4-7a4 4 0 1 0 -8 0c0 3.5 4 7 4 7z" />
+              <circle cx="6" cy="4" r="1.4" />
+            </svg>
+            {quote.project_address}
+          </span>
+        )}
+        {quote.client_contact_name && (
+          <span class="inline-flex items-center gap-1.5">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <rect x="1.5" y="2.5" width="9" height="7" rx="1" />
+              <path d="M1.5 3.5l4.5 3 4.5-3" />
+            </svg>
+            {quote.client_contact_name}
+          </span>
+        )}
+        {quote.sent_at && (
+          <span class="inline-flex items-center gap-1.5">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <rect x="1.5" y="2.5" width="9" height="8" rx="1" />
+              <path d="M1.5 5h9M4 1.5v2M8 1.5v2" />
+            </svg>
+            Sent {new Date(quote.sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+          </span>
+        )}
+      </div>
+
+      <!-- Primary action under header (only for live states) -->
+      {(['SENT','AWAITING','RESPONDED'] as const).includes(quote.state) && (
+        <div class="mt-4 flex items-center gap-2">
+          <a
+            href={`/quotes/${quote.id}#reply`}
+            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-[13px] font-medium hover:brightness-95"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 1.5l8.5 4-3.5 1.6-1.6 3.4-3.4-9z" />
+            </svg>
+            {quote.state === 'RESPONDED' ? 'Reply to client' : 'Send reminder'}
+          </a>
+        </div>
+      )}
 
       {quote.scope_summary && (
         <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
