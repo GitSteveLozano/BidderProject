@@ -14,6 +14,7 @@ const EDITABLE: ReadonlyArray<string> = [
   'legal_name',
   'trade_name',
   'owner_name',
+  'business_noun',
   'license_number',
   'license_jurisdiction',
   'license_classification',

@@ -2,6 +2,7 @@
 import Brief from '@/layouts/Brief.astro';
 import SettingsSections from '@/components/settings/SettingsSections';
 import { client as supabaseService } from '@/lib/supabase';
+import { noun } from '@/lib/noun';
 
 export const prerender = false;
 Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
@@ -17,9 +18,10 @@ if (!user || !membership || !env) {
 const svc = supabaseService(env, 'service');
 const { data: shop } = await svc
   .from('shops')
-  .select('legal_name, trade_name, owner_name, data_state')
+  .select('legal_name, trade_name, owner_name, data_state, business_noun')
   .eq('id', membership.shop_id)
   .maybeSingle();
+const nounLower = noun(shop?.business_noun);
 
 const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
 const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
@@ -44,7 +46,7 @@ const role = (membership.role.charAt(0).toUpperCase() + membership.role.slice(1)
       How Brief knows you.
     </h1>
     <p class="mt-3 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
-      Your shop, your license, your pricing defaults, the way Brief writes.
+      Your {nounLower}, your license, your pricing defaults, the way Brief writes.
       Change anything any time — nothing here is locked in.
     </p>
   </div>

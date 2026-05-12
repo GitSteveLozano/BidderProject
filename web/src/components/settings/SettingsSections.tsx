@@ -10,6 +10,7 @@
 import { createResource, createSignal, For, Show } from 'solid-js';
 import { isServer } from 'solid-js/web';
 import Button from '@/components/ui/Button';
+import { noun } from '@/lib/noun';
 import { Card, CardHeader, CardBody, CardFooter } from '@/components/ui/Card';
 import Field, { Input } from '@/components/ui/Field';
 import Pill from '@/components/ui/Pill';
@@ -51,12 +52,14 @@ const TOC: Array<{ id: string; label: string; group: 'identity' | 'work' | 'data
   { id: 'appearance',  label: 'Appearance',      group: 'account' },
 ];
 
-const GROUP_LABELS: Record<string, string> = {
-  account: 'Account',
-  identity: 'Your shop, on the record',
-  work: 'How you work',
-  data: 'Where data flows',
-};
+function groupLabels(n: string): Record<string, string> {
+  return {
+    account: 'Account',
+    identity: `Your ${n}, on the record`,
+    work: 'How you work',
+    data: 'Where data flows',
+  };
+}
 
 export default function SettingsSections(props: Props) {
   // Gate the fetch on a client-only source. Cloudflare Worker's fetch
@@ -85,6 +88,12 @@ export default function SettingsSections(props: Props) {
     }
   };
 
+  // Reactive noun derived from shop() — changes immediately when the
+  // operator saves a new value on the Shop card.
+  const nounLower = () => noun(shop()?.business_noun);
+  const nounPoss = () => noun(shop()?.business_noun, { possessive: true });
+  const labels = () => groupLabels(nounLower());
+
   return (
     <div class="grid grid-cols-1 lg:grid-cols-[200px_1fr] gap-x-10 gap-y-6">
       {/* Left-rail TOC */}
@@ -94,7 +103,7 @@ export default function SettingsSections(props: Props) {
             {(group) => (
               <div class="mb-4">
                 <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1.5">
-                  {GROUP_LABELS[group]}
+                  {labels()[group]}
                 </div>
                 <ul class="space-y-0.5">
                   <For each={TOC.filter((t) => t.group === group)}>
@@ -125,12 +134,12 @@ export default function SettingsSections(props: Props) {
               when={shop.error}
               fallback={
                 <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-8 text-sm italic font-serif text-[color:var(--color-muted)]">
-                  Loading your shop…
+                  Loading…
                 </div>
               }
             >
               <div class="rounded-xl border border-[color:var(--color-danger)] bg-[color:var(--color-danger-tint)] px-5 py-4 text-sm text-[color:var(--color-danger)]">
-                <div class="font-medium mb-1">Couldn't load your shop.</div>
+                <div class="font-medium mb-1">Couldn't load this profile.</div>
                 <div class="font-mono text-xs">{shop.error?.message}</div>
                 <button class="mt-2 underline" onClick={() => refetch()}>Try again</button>
               </div>
@@ -138,29 +147,29 @@ export default function SettingsSections(props: Props) {
           }
         >
           <div class="space-y-10">
-            <GroupHeader id="account-group" label={GROUP_LABELS.account} />
+            <GroupHeader id="account-group" label={labels().account} />
             <div class="space-y-5 -mt-6">
               <AccountSection id="account" user_email={props.user_email} user_name={props.user_name} role={props.role} />
               <AppearanceSection id="appearance" />
             </div>
 
-            <GroupHeader id="identity-group" label={GROUP_LABELS.identity} />
+            <GroupHeader id="identity-group" label={labels().identity} />
             <div class="space-y-5 -mt-6">
               <ShopSection id="shop" shop={shop()!} saving={savingKey() === 'shop'} onSave={(p) => onSave('shop', p)} />
               <LicenseSection id="license" shop={shop()!} saving={savingKey() === 'license'} onSave={(p) => onSave('license', p)} />
             </div>
 
-            <GroupHeader id="work-group" label={GROUP_LABELS.work} />
+            <GroupHeader id="work-group" label={labels().work} />
             <div class="space-y-5 -mt-6">
               <PricingSection id="pricing" shop={shop()!} saving={savingKey() === 'pricing'} onSave={(p) => onSave('pricing', p)} />
               <VoiceProfileSection id="voice" shop={shop()!} saving={savingKey() === 'voice'} onSave={(p) => onSave('voice', p)} />
             </div>
 
-            <GroupHeader id="data-group" label={GROUP_LABELS.data} />
+            <GroupHeader id="data-group" label={labels().data} />
             <div class="space-y-5 -mt-6">
               <IntegrationsSection id="integrations" shop={shop()!} onSave={(p) => onSave('integrations', p)} />
               <DeliveryStatusSection id="delivery" />
-              <DataExportSection id="export" shopId={shop()!.id} />
+              <DataExportSection id="export" shopId={shop()!.id} nounPoss={nounPoss()} />
             </div>
           </div>
           <Show when={errorKey()}>
@@ -244,11 +253,13 @@ function ShopSection(props: { id: string; shop: Shop; saving: boolean; onSave: (
     legal_name: props.shop.legal_name ?? '',
     trade_name: props.shop.trade_name ?? '',
     owner_name: props.shop.owner_name ?? '',
+    business_noun: props.shop.business_noun ?? 'shop',
   });
+  const sectionTitle = () => noun(props.shop.business_noun, { case: 'Title' });
   return (
     <Card>
       <CardHeader id={props.id}>
-        <h3 class="font-serif text-base font-medium flex-1">Shop</h3>
+        <h3 class="font-serif text-base font-medium flex-1">{sectionTitle()}</h3>
       </CardHeader>
       <CardBody>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -260,6 +271,18 @@ function ShopSection(props: { id: string; shop: Shop; saving: boolean; onSave: (
           </Field>
           <Field label="Owner name">
             <Input value={form().owner_name} onInput={(e) => setForm({ ...form(), owner_name: e.currentTarget.value })} />
+          </Field>
+          <Field
+            label="What you call this"
+            class="sm:col-span-2"
+            helper="Singular noun for your business. Defaults to 'shop'. Try 'agency', 'studio', 'practice', 'firm' — whatever fits how you actually talk about it. Used in the copy across Brief."
+          >
+            <Input
+              value={form().business_noun}
+              onInput={(e) => setForm({ ...form(), business_noun: e.currentTarget.value })}
+              placeholder="shop"
+              maxlength={32}
+            />
           </Field>
         </div>
       </CardBody>
@@ -596,7 +619,7 @@ function DeliveryStatusSection(props: { id: string }) {
   );
 }
 
-function DataExportSection(props: { id: string; shopId: string }) {
+function DataExportSection(props: { id: string; shopId: string; nounPoss: string }) {
   return (
     <Card>
       <CardHeader id={props.id}>
@@ -604,7 +627,7 @@ function DataExportSection(props: { id: string; shopId: string }) {
       </CardHeader>
       <CardBody>
         <p class="text-sm text-[color:var(--color-muted)] leading-relaxed">
-          Your data is yours. Export your shop's complete record as JSON — quotes, jobs, clients, line items, messages, events.
+          Your data is yours. Export your {props.nounPoss} complete record as JSON — quotes, jobs, clients, line items, messages, events.
         </p>
       </CardBody>
       <CardFooter>
