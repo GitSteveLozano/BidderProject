@@ -24,8 +24,9 @@ const { data: shop } = await svc
 
 const { data: quotes } = await svc
   .from('quotes')
-  .select('id, state, total, sent_at, created_at, responded_at')
-  .eq('shop_id', membership.shop_id);
+  .select('id, ref, state, total, margin_pct, sent_at, created_at, responded_at, client_name, project_title, next_step')
+  .eq('shop_id', membership.shop_id)
+  .order('responded_at', { ascending: false, nullsFirst: false });
 
 const { data: events } = await svc
   .from('events')
@@ -68,7 +69,30 @@ const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' '
 const activeQuotes = active.length;
 
 const today = new Date();
-const dateLine = today.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+// Per design/mockups/02-cost-recon.png — "MONDAY, MAY 11 · WEEK 19"
+const weekday = today.toLocaleDateString('en-US', { weekday: 'long' });
+const monthDay = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+const weekNumber = (() => {
+  const firstDayOfYear = new Date(today.getFullYear(), 0, 1);
+  const pastDaysOfYear = (today.getTime() - firstDayOfYear.getTime()) / 86400000;
+  return Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+})();
+const dateLine = `${weekday}, ${monthDay} · Week ${weekNumber}`;
+
+// Responded quotes drive "What needs you today" — the right panel.
+const respondedQuotes = qs
+  .filter((q) => q.state === 'RESPONDED')
+  .slice(0, 4);
+
+// 4th KPI: margin-on-closed (mockup 02-cost-recon.png column 4).
+// Available only when we have at least one WON quote with a margin_pct.
+const closedWithMargin = won
+  .map((q: any) => Number(q.margin_pct ?? 0))
+  .filter((m: number) => m > 0);
+const marginOnClosed =
+  closedWithMargin.length > 0
+    ? closedWithMargin.reduce((s: number, m: number) => s + m, 0) / closedWithMargin.length
+    : null;
 
 const eventLabels: Record<string, string> = {
   'quote.sent': 'Sent',
@@ -90,11 +114,33 @@ const eventLabels: Record<string, string> = {
   dataState={shop?.data_state ?? 'cold-start'}
   activeQuotes={activeQuotes}
 >
+  <!-- Topbar action buttons: Refresh + New quote (mockup 02-cost-recon.png). -->
+  <Fragment slot="topbar-actions">
+    <a
+      href="/dashboard"
+      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] text-[13px] font-medium hover:bg-[color:var(--color-surface-2)]"
+      aria-label="Refresh dashboard"
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+        <path d="M2 3.5v3.5h3.5" />
+        <path d="M11.5 8.5a4.5 4.5 0 1 1 -1.2 -4l1.7 0" />
+      </svg>
+      Refresh
+    </a>
+    <a
+      href="/generate"
+      class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-[13px] font-medium hover:brightness-95"
+    >
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" /></svg>
+      New quote
+    </a>
+  </Fragment>
+
   <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1">
     {dateLine}
   </div>
   <h1 class="font-serif text-[40px] font-medium leading-tight tracking-tight">
-    Morning, {ownerFirst}.
+    Morning, <em>{ownerFirst}</em>.
   </h1>
 
   {coldStart && (
@@ -127,11 +173,11 @@ const eventLabels: Record<string, string> = {
         </p>
       )}
 
-      <div class="mt-6 grid grid-cols-3 gap-3">
+      <div class="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-3">
         <a href="/quotes" class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5 hover:bg-[color:var(--color-surface-2)] transition-colors">
-          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Pipeline value</div>
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] leading-tight">Quote value<br/>out</div>
           <div class="mt-2 font-serif text-kpi font-medium tabular-nums">{fmtCurrencyCompact(pipelineValue)}</div>
-          <div class="mt-1 text-xs text-[color:var(--color-muted)]">{active.length} active quotes</div>
+          <div class="mt-1 text-xs text-[color:var(--color-muted)]">{active.length} active quote{active.length === 1 ? '' : 's'}</div>
         </a>
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
           <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Win rate · 90d</div>
@@ -140,14 +186,27 @@ const eventLabels: Record<string, string> = {
           </div>
           <div class="mt-1 text-xs text-[color:var(--color-muted)]">
             {decided.length < 3
-              ? `Need ${3 - decided.length} more decided quote${3 - decided.length === 1 ? '' : 's'}`
+              ? `Need ≥${3 - decided.length} more closed`
               : `${won.length} of ${decided.length} won`}
           </div>
         </div>
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
-          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Avg quote</div>
-          <div class="mt-2 font-serif text-kpi font-medium tabular-nums">{fmtCurrencyCompact(avgQuote)}</div>
-          <div class="mt-1 text-xs text-[color:var(--color-muted)]">across {qs.length} quotes total</div>
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] leading-tight">Avg quote<br/>→ sign</div>
+          <div class="mt-2 font-serif text-kpi font-medium tabular-nums">
+            {qs.length === 0 ? '—' : fmtCurrencyCompact(avgQuote)}
+          </div>
+          <div class="mt-1 text-xs text-[color:var(--color-muted)]">
+            {qs.length === 0 ? 'needs ≥10 sent' : `across ${qs.length} quote${qs.length === 1 ? '' : 's'}`}
+          </div>
+        </div>
+        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] leading-tight">Margin on<br/>closed</div>
+          <div class="mt-2 font-serif text-kpi font-medium tabular-nums">
+            {marginOnClosed != null ? `${marginOnClosed.toFixed(1)}%` : '—'}
+          </div>
+          <div class="mt-1 text-xs text-[color:var(--color-muted)]">
+            {marginOnClosed == null ? 'needs closed jobs' : `from ${closedWithMargin.length} closed`}
+          </div>
         </div>
       </div>
 
@@ -183,6 +242,43 @@ const eventLabels: Record<string, string> = {
           ))}
         </div>
       </div>
+
+      <!-- "What needs you today" panel — per design/mockups/02-cost-recon.png.
+           Pulls RESPONDED quotes (client has come back, ball is in our court). -->
+      {respondedQuotes.length > 0 && (
+        <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+          <div class="flex items-center gap-2 mb-3">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-accent)]" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
+              <path d="M7 1l1.6 4.3h4.4l-3.5 2.8 1.3 4.3-3.8-2.6-3.8 2.6 1.3-4.3-3.5-2.8h4.4z" />
+            </svg>
+            <h3 class="font-serif text-base font-medium flex-1">What needs you today</h3>
+            <a href="/quotes" class="text-xs text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)]">All quotes →</a>
+          </div>
+          <ol class="divide-y divide-[color:var(--color-line)]">
+            {respondedQuotes.map((q: any) => (
+              <li class="py-3 first:pt-0 last:pb-0 flex items-start gap-3">
+                <div class="w-7 h-7 rounded-full bg-[color:var(--color-accent-tint)] text-[color:var(--color-accent)] grid place-items-center text-[11px] font-serif font-semibold shrink-0">
+                  {(q.client_name ?? '?').charAt(0).toUpperCase()}
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm">
+                    {q.next_step ?? `${q.client_name} responded — read the thread and reply.`}
+                  </div>
+                  <div class="text-xs text-[color:var(--color-muted)] mt-0.5 font-mono">
+                    {q.ref}
+                  </div>
+                </div>
+                <a
+                  href={`/quotes/${q.id}`}
+                  class="inline-flex items-center px-3 py-1.5 rounded-md bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-xs font-medium hover:brightness-95 shrink-0"
+                >
+                  Open
+                </a>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
 
       <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
         <h3 class="font-serif text-base font-medium mb-3">Recent activity</h3>
