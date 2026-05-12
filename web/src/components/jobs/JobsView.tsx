@@ -9,6 +9,7 @@ import { createSignal, For, Show, createMemo, createResource } from 'solid-js';
 import { fmtCurrencyFull } from '@/lib/quote-helpers';
 import StatusPill, { type JobState } from '@/components/ui/StatusPill';
 import Pill from '@/components/ui/Pill';
+import JobActionDrawer, { type JobActionMode } from '@/components/jobs/JobActionDrawer';
 
 interface JobRow {
   id: string;
@@ -50,6 +51,12 @@ export default function JobsView(props: Props) {
   const [selectedId, setSelectedId] = createSignal<string | null>(props.jobs[0]?.id ?? null);
   const selected = createMemo(() => props.jobs.find((j) => j.id === selectedId()) ?? null);
   const [costLines] = createResource(selectedId, (id) => (id ? loadCostLines(id) : Promise.resolve([])));
+  const [drawerOpen, setDrawerOpen] = createSignal(false);
+  const [drawerMode, setDrawerMode] = createSignal<JobActionMode>('update');
+  const openDrawer = (mode: JobActionMode) => {
+    setDrawerMode(mode);
+    setDrawerOpen(true);
+  };
 
   const updateActual = async (lineId: string, value: number) => {
     await fetch(`/api/job/cost-line/${lineId}`, {
@@ -121,11 +128,32 @@ export default function JobsView(props: Props) {
                 job={selected()!}
                 costLines={() => costLines() ?? []}
                 onUpdate={updateActual}
+                onAction={openDrawer}
               />
             </Show>
           </main>
         </div>
       </Show>
+
+      <JobActionDrawer
+        open={drawerOpen()}
+        onClose={() => setDrawerOpen(false)}
+        mode={drawerMode()}
+        job={
+          selected()
+            ? {
+                id: selected()!.id,
+                ref: selected()!.ref,
+                project_title: selected()!.project_title,
+                client_name: selected()!.client_name,
+                state: selected()!.state as 'SCHEDULED' | 'INPROGRESS' | 'CLOSED',
+                variance_pct: selected()!.variance_pct,
+                scheduled_start: selected()!.scheduled_start,
+                scheduled_end: selected()!.scheduled_end,
+              }
+            : null
+        }
+      />
     </div>
   );
 }
@@ -134,6 +162,7 @@ function Detail(p: {
   job: JobRow;
   costLines: () => CostLine[];
   onUpdate: (lineId: string, value: number) => void;
+  onAction: (mode: JobActionMode) => void;
 }) {
   const totalActual = createMemo(() =>
     p.costLines().reduce((s, c) => s + Number(c.actual ?? 0), 0),
@@ -210,6 +239,31 @@ function Detail(p: {
               </span>
             </Show>
           </div>
+          <Show when={p.job.state !== 'CLOSED'}>
+            <div class="mt-4 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => p.onAction('update')}
+                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-[13px] font-medium hover:brightness-95"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M2 1.5l8.5 4-3.5 1.6-1.6 3.4-3.4-9z" />
+                </svg>
+                Update client
+              </button>
+              <button
+                type="button"
+                onClick={() => p.onAction('check-in')}
+                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface)] text-[color:var(--color-ink)] text-[13px] font-medium hover:bg-[color:var(--color-surface-2)]"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="6" cy="6" r="4.5" />
+                  <path d="M6 3.5v2.5l1.6 1.1" />
+                </svg>
+                Schedule check-in
+              </button>
+            </div>
+          </Show>
         </div>
         <ProgressRing percent={pctComplete()} state={p.job.state} />
       </div>
