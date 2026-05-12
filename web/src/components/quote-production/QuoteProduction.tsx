@@ -185,7 +185,8 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           shop: props.shop,
         }),
       });
-      if (!resp.ok) throw new Error(`PDF render failed: ${await resp.text()}`);
+      if (!resp.ok) throw new Error(`Preview render failed: ${await resp.text()}`);
+      // Response is HTML; iframe via blob URL so the browser owns the print flow.
       const blob = await resp.blob();
       setPdfUrl(URL.createObjectURL(blob));
     } catch (err) {
@@ -611,6 +612,14 @@ function ReviewStep(p: {
   sending: () => boolean;
   error: () => string | null;
 }) {
+  let iframeRef: HTMLIFrameElement | undefined;
+
+  const printIt = () => {
+    if (!iframeRef || !iframeRef.contentWindow) return;
+    iframeRef.contentWindow.focus();
+    iframeRef.contentWindow.print();
+  };
+
   return (
     <div>
       <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
@@ -628,17 +637,33 @@ function ReviewStep(p: {
       <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface-2)] overflow-hidden">
         <Show when={p.rendering()}>
           <div class="aspect-[8.5/11] flex items-center justify-center text-sm text-[color:var(--color-muted)]">
-            Rendering PDF…
+            Rendering preview…
           </div>
         </Show>
         <Show when={!p.rendering() && p.pdfUrl()}>
           <iframe
+            ref={iframeRef!}
             src={p.pdfUrl()!}
             class="w-full aspect-[8.5/11] bg-white"
             title="Bid preview"
           />
         </Show>
       </div>
+
+      <Show when={!p.rendering() && p.pdfUrl()}>
+        <div class="mt-3 flex items-center justify-between text-xs text-[color:var(--color-muted)]">
+          <span class="italic font-serif">
+            Looks right? Print to PDF before sending, or just save and mark sent.
+          </span>
+          <button
+            type="button"
+            onClick={printIt}
+            class="underline hover:text-[color:var(--color-ink)]"
+          >
+            Print / Save as PDF
+          </button>
+        </div>
+      </Show>
 
       <Show when={p.error()}>
         <div class="mt-4 rounded-lg bg-[color:var(--color-danger-tint)] px-4 py-3 text-sm text-[color:var(--color-danger)]">
