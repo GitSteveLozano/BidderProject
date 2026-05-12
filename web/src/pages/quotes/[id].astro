@@ -1,6 +1,7 @@
 ---
 import Brief from '@/layouts/Brief.astro';
 import StatusPill from '@/components/ui/StatusPill';
+import LineItemsTable from '@/components/quotes/LineItemsTable';
 import { client as supabaseService } from '@/lib/supabase';
 import { fmtCurrencyFull, fmtRelativeDate } from '@/lib/quote-helpers';
 
@@ -163,42 +164,24 @@ const eventLabels: Record<string, string> = {
         </div>
       )}
 
-      <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
-        <div class="px-5 py-3.5 border-b border-[color:var(--color-line)] flex items-center gap-2.5">
-          <h3 class="font-serif text-base font-medium flex-1">Line items</h3>
-        </div>
-        <table class="w-full">
-          <thead class="bg-[color:var(--color-surface-2)]">
-            <tr>
-              <th class="px-3.5 py-2.5 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Description</th>
-              <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Qty</th>
-              <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Unit</th>
-              <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Subtotal</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lineItems.map((li: any) => (
-              <tr class="border-t border-[color:var(--color-line)]">
-                <td class="px-3.5 py-3 text-sm">{li.description}</td>
-                <td class="px-3.5 py-3 text-right text-sm font-mono tabular-nums">
-                  {Number(li.qty).toLocaleString()}
-                </td>
-                <td class="px-3.5 py-3 text-right text-xs font-mono text-[color:var(--color-muted)]">
-                  {li.unit ?? ''}
-                </td>
-                <td class="px-3.5 py-3 text-right text-sm font-mono tabular-nums">
-                  {fmtCurrencyFull(Number(li.subtotal))}
-                </td>
-              </tr>
-            ))}
-            <tr class="border-t-2 border-[color:var(--color-ink)] bg-[color:var(--color-surface-2)]">
-              <td colspan="3" class="px-3.5 py-3 text-right font-medium">Total</td>
-              <td class="px-3.5 py-3 text-right font-serif text-[18px] tabular-nums">
-                {fmtCurrencyFull(Number(quote.total))}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="mt-6">
+        <LineItemsTable
+          client:load
+          quote_id={quote.id}
+          initial={lineItems.map((li: any) => ({
+            id: li.id,
+            position: li.position,
+            description: li.description,
+            qty: Number(li.qty),
+            unit: li.unit,
+            unit_price: Number(li.unit_price),
+            subtotal: Number(li.subtotal),
+            category: li.category,
+            confidence: li.confidence,
+          }))}
+          editable={quote.state === 'DRAFT'}
+          total={Number(quote.total)}
+        />
       </div>
     </div>
 
