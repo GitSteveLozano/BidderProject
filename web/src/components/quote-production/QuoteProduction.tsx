@@ -380,8 +380,7 @@ function IntakeStep(p: {
             title="Drop a PDF or doc"
             sub="Client RFP, blueprints, contractor email"
             icon={<svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M7 4h7l4 4v9.5a1.5 1.5 0 0 1 -1.5 1.5h-9.5a1.5 1.5 0 0 1 -1.5 -1.5v-12a1.5 1.5 0 0 1 1.5 -1.5z" /><path d="M14 4v4h4" /><path d="M11 18v-4M9 16l2 -2 2 2" stroke-linecap="round" /></svg>}
-            disabled
-            disabledNote="Coming soon — text paste works today"
+            onClick={() => setMethod('pdf')}
           />
           <div class="grid grid-cols-1 gap-3">
             <MethodCard
@@ -398,8 +397,7 @@ function IntakeStep(p: {
               title="Talk through the walk-through"
               sub="Record from your truck on the way back"
               icon={<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="6" height="9" rx="3" /><path d="M4 10a6 6 0 0 0 12 0M10 16v2" stroke-linecap="round" /></svg>}
-              disabled
-              disabledNote="Coming soon"
+              onClick={() => setMethod('voice')}
             />
           </div>
         </div>
@@ -502,13 +500,41 @@ function MethodForm(p: {
           <Input value={p.projectAddress()} onInput={(e) => p.setProjectAddress(e.currentTarget.value)} />
         </Field>
       </div>
+
+      <Show when={p.method === 'pdf'}>
+        <div class="mt-4">
+          <PdfIntake setScopeText={p.setScopeText} />
+        </div>
+      </Show>
+
+      <Show when={p.method === 'voice'}>
+        <div class="mt-4">
+          <VoiceIntake setScopeText={p.setScopeText} />
+        </div>
+      </Show>
+
       <div class="mt-4">
-        <Field label="Scope text" helper="RFP, email body, walk-through notes — paste anything that describes the work">
+        <Field
+          label={p.method === 'pdf' ? 'Extracted text' : p.method === 'voice' ? 'Transcript' : 'Scope text'}
+          helper={
+            p.method === 'pdf'
+              ? "We pulled this from the PDF. Edit anything that came through garbled — Brief reads what you keep."
+              : p.method === 'voice'
+                ? "Brief's transcript of the recording. Tidy it up if you like — anything you keep is what gets scanned."
+                : 'RFP, email body, walk-through notes — paste anything that describes the work'
+          }
+        >
           <textarea
             rows={10}
             value={p.scopeText()}
             onInput={(e) => p.setScopeText(e.currentTarget.value)}
-            placeholder="Paste the scope text here…"
+            placeholder={
+              p.method === 'pdf'
+                ? 'PDF text will appear here after extract…'
+                : p.method === 'voice'
+                  ? 'Transcript will appear here after recording…'
+                  : 'Paste the scope text here…'
+            }
             class="w-full px-3 py-2.5 rounded-lg text-sm text-[color:var(--color-ink)] font-sans bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] focus:outline-none focus:border-[color:var(--color-accent)] focus:shadow-[0_0_0_3px_var(--color-accent-tint)] resize-y min-h-[180px] leading-relaxed"
           />
         </Field>
@@ -520,6 +546,220 @@ function MethodForm(p: {
       </div>
     </div>
   );
+}
+
+function PdfIntake(p: { setScopeText: (v: string) => void }) {
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+  const [info, setInfo] = createSignal<{ filename: string; pages: number; chars: number } | null>(null);
+  let inputRef: HTMLInputElement | undefined;
+
+  const handle = async (file: File) => {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const resp = await fetch('/api/intake/extract-pdf', { method: 'POST', body: fd });
+      if (!resp.ok) throw new Error(await resp.text());
+      const data = await resp.json() as { text: string; page_count: number; empty_text: boolean; filename: string };
+      if (data.empty_text) {
+        setError('Brief read the PDF but found no selectable text — looks scanned. Try the voice or paste option instead.');
+        return;
+      }
+      p.setScopeText(data.text);
+      setInfo({ filename: data.filename, pages: data.page_count, chars: data.text.length });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <label
+        class={[
+          'block rounded-xl border-2 border-dashed cursor-pointer px-5 py-6 text-center transition-colors',
+          busy()
+            ? 'border-[color:var(--color-accent)] bg-[color:var(--color-accent-tint)]'
+            : 'border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] hover:border-[color:var(--color-accent)]',
+        ].join(' ')}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept="application/pdf,.pdf"
+          class="sr-only"
+          onChange={(e) => {
+            const f = e.currentTarget.files?.[0];
+            if (f) handle(f);
+          }}
+        />
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" class="mx-auto text-[color:var(--color-muted)]" aria-hidden="true">
+          <path d="M7 4h7l4 4v9.5a1.5 1.5 0 0 1 -1.5 1.5h-9.5a1.5 1.5 0 0 1 -1.5 -1.5v-12a1.5 1.5 0 0 1 1.5 -1.5z" />
+          <path d="M14 4v4h4" />
+          <path d="M11 18v-5M9 15l2 -2 2 2" stroke-linecap="round" />
+        </svg>
+        <div class="mt-2 text-sm font-medium">
+          {busy() ? 'Extracting text…' : info() ? `${info()!.filename} · ${info()!.pages} page${info()!.pages === 1 ? '' : 's'} · ${info()!.chars.toLocaleString()} chars` : 'Drop a PDF or click to choose'}
+        </div>
+        <div class="mt-1 text-xs text-[color:var(--color-muted)]">
+          Up to 15 MB. Native-text PDFs only — scanned images won't parse.
+        </div>
+      </label>
+      <Show when={error()}>
+        <div class="mt-2 text-xs text-[color:var(--color-danger)]">{error()}</div>
+      </Show>
+    </div>
+  );
+}
+
+function VoiceIntake(p: { setScopeText: (v: string) => void }) {
+  const [state, setState] = createSignal<'idle' | 'recording' | 'uploading' | 'done'>('idle');
+  const [error, setError] = createSignal<string | null>(null);
+  const [info, setInfo] = createSignal<{ duration: number | null; chars: number } | null>(null);
+  const [elapsed, setElapsed] = createSignal(0);
+  let mediaRecorder: MediaRecorder | null = null;
+  let chunks: BlobPart[] = [];
+  let timer: number | null = null;
+
+  const start = async () => {
+    setError(null);
+    setInfo(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      chunks = [];
+      const mime = pickAudioMime();
+      mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunks, { type: mediaRecorder?.mimeType || 'audio/webm' });
+        await transcribe(blob);
+      };
+      mediaRecorder.start();
+      setState('recording');
+      setElapsed(0);
+      timer = window.setInterval(() => setElapsed(elapsed() + 1), 1000);
+    } catch (err) {
+      setError(`Mic access failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const stop = () => {
+    if (timer != null) { clearInterval(timer); timer = null; }
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+      setState('uploading');
+    }
+  };
+
+  const transcribe = async (blob: Blob) => {
+    try {
+      const fd = new FormData();
+      fd.append('file', blob, blob.type.includes('mp4') ? 'recording.m4a' : 'recording.webm');
+      const resp = await fetch('/api/intake/transcribe', { method: 'POST', body: fd });
+      if (!resp.ok) throw new Error(await resp.text());
+      const data = await resp.json() as { text: string; duration_seconds: number | null; empty_text: boolean };
+      if (data.empty_text) {
+        setError('Brief got the recording but no speech came through. Try recording again somewhere quieter.');
+        setState('idle');
+        return;
+      }
+      p.setScopeText(data.text);
+      setInfo({ duration: data.duration_seconds, chars: data.text.length });
+      setState('done');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setState('idle');
+    }
+  };
+
+  return (
+    <div>
+      <div
+        class={[
+          'rounded-xl border border-[color:var(--color-line-2)] px-5 py-5 flex items-center gap-4',
+          state() === 'recording'
+            ? 'bg-[color:var(--color-danger-tint)] border-[color:var(--color-danger)]'
+            : 'bg-[color:var(--color-surface-2)]',
+        ].join(' ')}
+      >
+        <button
+          type="button"
+          onClick={state() === 'recording' ? stop : start}
+          disabled={state() === 'uploading'}
+          class={[
+            'w-12 h-12 rounded-full grid place-items-center shrink-0 transition-colors',
+            state() === 'recording'
+              ? 'bg-[color:var(--color-danger)] text-white animate-pulse'
+              : 'bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)]',
+            state() === 'uploading' ? 'opacity-50 cursor-wait' : 'hover:brightness-95',
+          ].join(' ')}
+          aria-label={state() === 'recording' ? 'Stop recording' : 'Start recording'}
+        >
+          <Show
+            when={state() === 'recording'}
+            fallback={
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">
+                <rect x="7" y="2" width="6" height="9" rx="3" />
+                <path d="M4 10a6 6 0 0 0 12 0M10 16v2" stroke-linecap="round" />
+              </svg>
+            }
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+              <rect x="2" y="2" width="10" height="10" rx="1.5" />
+            </svg>
+          </Show>
+        </button>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-medium">
+            {state() === 'idle' && 'Tap to start recording'}
+            {state() === 'recording' && 'Recording…'}
+            {state() === 'uploading' && 'Transcribing with Workers AI…'}
+            {state() === 'done' && info() && `Transcribed ${info()!.chars.toLocaleString()} chars${info()!.duration ? ` (${Math.round(info()!.duration!)}s)` : ''}`}
+          </div>
+          <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
+            {state() === 'recording'
+              ? `${Math.floor(elapsed() / 60)}:${String(elapsed() % 60).padStart(2, '0')} elapsed — tap to stop`
+              : state() === 'done'
+                ? 'Transcript appears below; edit anything you want to keep.'
+                : 'Up to 25 minutes. Talk through the walk-through; Brief structures it.'}
+          </div>
+        </div>
+        <Show when={state() === 'done'}>
+          <button
+            type="button"
+            onClick={start}
+            class="text-xs text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)] underline"
+          >
+            Record again
+          </button>
+        </Show>
+      </div>
+      <Show when={error()}>
+        <div class="mt-2 text-xs text-[color:var(--color-danger)]">{error()}</div>
+      </Show>
+    </div>
+  );
+}
+
+function pickAudioMime(): string | null {
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+    'audio/ogg;codecs=opus',
+  ];
+  if (typeof MediaRecorder === 'undefined') return null;
+  for (const m of candidates) {
+    if (MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return null;
 }
 
 function ScopeStep(p: {
