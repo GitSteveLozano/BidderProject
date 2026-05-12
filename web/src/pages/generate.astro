@@ -1,56 +1,49 @@
 ---
-import Base from '@/layouts/Base.astro';
-import SSRError from '@/components/SSRError.astro';
-import BidGenerator from '@/components/BidGenerator';
-import { getCompanies, getServiceLines } from '@/lib/supabase';
+import Brief from '@/layouts/Brief.astro';
+import QuoteProduction from '@/components/quote-production/QuoteProduction';
+import { client as supabaseService } from '@/lib/supabase';
 
-// `prerender = false` MUST appear before any await so the Astro
-// hybrid build classifies this route as SSR (otherwise it's
-// prerendered at build time and Astro.locals.runtime is undefined).
 export const prerender = false;
-
-// Personalized SSR responses must not be edge-cached. See bids.astro
-// for the full story; in short, the middleware that did this once
-// was reverted (9efe16d) for breaking SSR, so each page sets headers
-// itself. cdn-cache-control targets Cloudflare; cache-control covers
-// browsers.
 Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
 Astro.response.headers.set('cdn-cache-control', 'no-store');
 
-let renderError: unknown = null;
-let companies: Awaited<ReturnType<typeof getCompanies>> = [];
-let serviceLines: Awaited<ReturnType<typeof getServiceLines>> = [];
-
-try {
-  const env = Astro.locals.runtime?.env;
-  companies = await getCompanies(env);
-  const defaultCompanyId = companies[0]?.id;
-  serviceLines = defaultCompanyId
-    ? await getServiceLines(defaultCompanyId, env)
-    : [];
-} catch (e) {
-  renderError = e;
+const env = Astro.locals.runtime?.env;
+const user = Astro.locals.user;
+const membership = Astro.locals.membership;
+if (!user || !membership || !env) {
+  return Astro.redirect('/auth/signin?next=/generate');
 }
+
+const svc = supabaseService(env, 'service');
+const { data: shop } = await svc
+  .from('shops')
+  .select('legal_name, trade_name, license_number, license_jurisdiction, default_markup_pct, default_labor_rate, voice_profile, owner_name, data_state')
+  .eq('id', membership.shop_id)
+  .maybeSingle();
+
+const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
+const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
+
+const shopContext = {
+  legal_name: shop?.legal_name ?? '',
+  trade_name: shop?.trade_name ?? undefined,
+  license_number: shop?.license_number ?? undefined,
+  license_jurisdiction: shop?.license_jurisdiction ?? undefined,
+  boilerplate_intro: shop?.voice_profile?.boilerplate_intro ?? undefined,
+  boilerplate_closing: shop?.voice_profile?.boilerplate_closing ?? undefined,
+  default_markup_pct: Number(shop?.default_markup_pct ?? 32),
+  default_labor_rate: Number(shop?.default_labor_rate ?? 92),
+};
 ---
 
-<Base title="Generate a bid · ProService Bid Intelligence">
-  <section class="py-6">
-    <h1 class="text-3xl font-semibold tracking-tight">Generate a bid</h1>
-    <p class="mt-2 text-ink-600 max-w-2xl">
-      Fill in the scope and labor plan. All 4 generation agents fire in
-      sequence — Intake parses your scope, Context loads the company
-      profile, Pricing queries real loaded labor data, and Composition
-      writes the bid in voice with exclusions verified.
-    </p>
-  </section>
-
-  {renderError ? (
-    <SSRError page="/generate" error={renderError} />
-  ) : (
-    <BidGenerator
-      client:load
-      companies={companies}
-      serviceLines={serviceLines}
-    />
-  )}
-</Base>
+<Brief
+  title="New quote"
+  active="newquote"
+  shopLabel={shopLabel}
+  shopInitial={shopLabel.charAt(0).toUpperCase()}
+  ownerFirst={ownerFirst}
+  ownerRole={membership.role.charAt(0).toUpperCase() + membership.role.slice(1)}
+  dataState={shop?.data_state ?? 'cold-start'}
+>
+  <QuoteProduction client:load shop={shopContext} />
+</Brief>
