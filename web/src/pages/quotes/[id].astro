@@ -4,6 +4,7 @@ import StatusPill from '@/components/ui/StatusPill';
 import LineItemsTable from '@/components/quotes/LineItemsTable';
 import LogReplyButton from '@/components/quotes/LogReplyButton';
 import MarkOutcomeButtons from '@/components/quotes/MarkOutcomeButtons';
+import QuotePostmortem from '@/components/quotes/QuotePostmortem';
 import { client as supabaseService } from '@/lib/supabase';
 import { fmtCurrencyFull, fmtRelativeDate } from '@/lib/quote-helpers';
 
@@ -170,6 +171,12 @@ const eventLabels: Record<string, string> = {
           <p class="font-serif text-[15px] leading-relaxed text-[color:var(--color-ink-2)]">
             {quote.scope_summary}
           </p>
+        </div>
+      )}
+
+      {quote.state === 'LOST' && (
+        <div class="mt-6">
+          <QuotePostmortem client:load quote_id={quote.id} />
         </div>
       )}
 
