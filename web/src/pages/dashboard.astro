@@ -2,7 +2,7 @@
 import Brief from '@/layouts/Brief.astro';
 import Pill from '@/components/ui/Pill';
 import { client as supabaseService } from '@/lib/supabase';
-import { fmtCurrencyCompact, fmtRelativeDate } from '@/lib/quote-helpers';
+import { fmtCurrencyCompact } from '@/lib/quote-helpers';
 
 export const prerender = false;
 Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
@@ -33,12 +33,24 @@ const { data: jobs } = await svc
   .select('id, ref, project_title, client_name, state, estimated_total, actual_total, variance_pct, scheduled_start, actual_start, scheduled_end')
   .eq('shop_id', membership.shop_id);
 
+// Pull a wider window of events than we used to — the "What you
+// almost missed" panel needs to count opens per quote over 7 days.
+const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 const { data: events } = await svc
   .from('events')
-  .select('id, type, quote_id, actor, payload, created_at')
+  .select('id, type, quote_id, job_id, actor, payload, created_at')
   .eq('shop_id', membership.shop_id)
-  .order('created_at', { ascending: false })
-  .limit(10);
+  .gte('created_at', thirtyDaysAgo.toISOString())
+  .order('created_at', { ascending: false });
+
+// Last outbound message per quote — used to detect RESPONDED quotes
+// where Brief hasn't drafted a reply yet.
+const { data: outboundMessages } = await svc
+  .from('quote_messages')
+  .select('quote_id, sent_at')
+  .eq('direction', 'outbound')
+  .not('sent_at', 'is', null)
+  .order('sent_at', { ascending: false });
 
 // ─── KPI computations ───────────────────────────────────────────
 const qs = quotes ?? [];
@@ -210,6 +222,138 @@ const aheadInsight = (() => {
     quotedMarginPct,
   };
 })();
+
+// ─── Outcomes strip (last 30 days) ──────────────────────────────
+// Looks back over closed quotes — won/lost counts + totals + average
+// time from sent → outcome + average margin on won. Editorial
+// retrospective; replaces the firehose Recent Activity feed.
+const last30Won = won.filter((q: any) => {
+  const ref = q.outcome_captured_at ?? q.responded_at;
+  return ref && new Date(ref) >= thirtyDaysAgo;
+});
+const last30Lost = qs.filter((q: any) => q.state === 'LOST').filter((q: any) => {
+  const ref = q.outcome_captured_at ?? q.updated_at;
+  return ref && new Date(ref) >= thirtyDaysAgo;
+});
+const last30WonTotal = last30Won.reduce((s: number, q: any) => s + Number(q.total ?? 0), 0);
+const last30LostTotal = last30Lost.reduce((s: number, q: any) => s + Number(q.total ?? 0), 0);
+const last30CloseTimes = last30Won
+  .map((q: any) => daysBetween(q.sent_at, q.responded_at ?? q.outcome_captured_at))
+  .filter((d: number | null): d is number => d !== null);
+const last30AvgCloseDays =
+  last30CloseTimes.length ? last30CloseTimes.reduce((s, d) => s + d, 0) / last30CloseTimes.length : null;
+const last30MarginPcts = last30Won
+  .map((q: any) => Number(q.margin_pct ?? 0))
+  .filter((m: number) => m > 0);
+const last30AvgMargin =
+  last30MarginPcts.length ? last30MarginPcts.reduce((s, m) => s + m, 0) / last30MarginPcts.length : null;
+const outcomesHasData = last30Won.length + last30Lost.length > 0;
+
+// ─── "What you almost missed" curated misses ────────────────────
+// Brief looks for quotes/jobs that meet a "this is sneaky" signal —
+// e.g. the client opened the quote 3+ times but no reply was drafted,
+// or a response went 24+ hours without an outbound, or a job's
+// variance crossed an overrun threshold. These complement (don't
+// duplicate) the action-queue on the right rail.
+type MissKind = 'multi-open' | 'cold-response' | 'long-awaiting' | 'job-overrun';
+interface MissItem {
+  id: string;
+  kind: MissKind;
+  client_name: string;
+  headline: string;
+  detail: string;
+  href: string;
+  cta: string;
+}
+
+// Multi-opens: count `quote.opened` events per quote in the last 7 days.
+const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+const opensByQuote = new Map<string, number>();
+for (const e of evs) {
+  if (e.type !== 'quote.opened') continue;
+  if (new Date(e.created_at) < sevenDaysAgo) continue;
+  if (!e.quote_id) continue;
+  opensByQuote.set(e.quote_id, (opensByQuote.get(e.quote_id) ?? 0) + 1);
+}
+
+// Last outbound per quote.
+const lastOutboundByQuote = new Map<string, string>();
+for (const m of outboundMessages ?? []) {
+  if (!m.quote_id) continue;
+  if (!lastOutboundByQuote.has(m.quote_id)) {
+    lastOutboundByQuote.set(m.quote_id, m.sent_at as string);
+  }
+}
+
+const misses: MissItem[] = [];
+
+// Signal 1: multi-open, no outbound after the first open
+for (const [quote_id, openCount] of opensByQuote) {
+  if (openCount < 3) continue;
+  const q: any = qs.find((q: any) => q.id === quote_id);
+  if (!q) continue;
+  if (q.state === 'WON' || q.state === 'LOST') continue;
+  const lastOut = lastOutboundByQuote.get(quote_id);
+  if (lastOut && new Date(lastOut) >= sevenDaysAgo) continue;
+  misses.push({
+    id: q.id,
+    kind: 'multi-open',
+    client_name: q.client_name,
+    headline: `${(q.client_name ?? '').split(/\s+/)[0]} has opened the quote ${openCount}× this week`,
+    detail: `No follow-up yet. Reading it that many times usually means there's a question coming.`,
+    href: `/quotes/${q.id}#reply`,
+    cta: 'Reach out',
+  });
+}
+
+// Signal 2: RESPONDED quotes where no outbound exists after responded_at
+for (const q of qs.filter((q: any) => q.state === 'RESPONDED')) {
+  const responded = q.responded_at ? new Date(q.responded_at) : null;
+  if (!responded) continue;
+  const hoursSince = (Date.now() - responded.getTime()) / 3_600_000;
+  if (hoursSince < 24) continue;
+  const lastOut = lastOutboundByQuote.get(q.id);
+  if (lastOut && new Date(lastOut) > responded) continue;
+  misses.push({
+    id: q.id,
+    kind: 'cold-response',
+    client_name: q.client_name,
+    headline: `${(q.client_name ?? '').split(/\s+/)[0]} wrote back ${Math.round(hoursSince / 24) || 1}d ago — no reply yet`,
+    detail: 'Brief can draft one. Open the quote to take it from there.',
+    href: `/quotes/${q.id}#reply`,
+    cta: 'Reply',
+  });
+}
+
+// Signal 3: AWAITING ≥ 10 days — cold beyond the usual nudge window
+for (const q of qs.filter((q: any) => q.state === 'AWAITING' && ageOf(q) >= 10)) {
+  misses.push({
+    id: q.id,
+    kind: 'long-awaiting',
+    client_name: q.client_name,
+    headline: `${(q.client_name ?? '').split(/\s+/)[0]} has gone quiet for ${ageOf(q)} days`,
+    detail: 'Past the usual nudge window. A final soft check-in or a Mark-lost might be due.',
+    href: `/quotes/${q.id}`,
+    cta: 'Open quote',
+  });
+}
+
+// Signal 4: in-progress jobs with overrun > 5%
+for (const j of js.filter((j: any) => j.state === 'INPROGRESS' && Number(j.variance_pct ?? 0) > 5)) {
+  misses.push({
+    id: j.id,
+    kind: 'job-overrun',
+    client_name: j.client_name,
+    headline: `${j.project_title} is ${Number(j.variance_pct).toFixed(0)}% over plan`,
+    detail: `Variance climbed past your 5% comfort line. Consider a status update before the client asks.`,
+    href: `/jobs#${j.id}`,
+    cta: 'Open job',
+  });
+}
+
+// Cap and sort — most-recent client name signal first (deterministic enough).
+misses.sort((a, b) => a.kind.localeCompare(b.kind) || a.client_name.localeCompare(b.client_name));
+misses.splice(6);
 
 const calibrating = shop?.data_state === 'calibrating';
 const coldStart = shop?.data_state === 'cold-start';
@@ -464,34 +608,98 @@ const ACTION_BUTTON: Record<ActionKind, { label: string; href: (id: string) => s
             )}
           </div>
 
-          <!-- Recent activity (moved to main col so the right rail stays focused on actions/insights) -->
+          <!-- Outcomes strip — last 30 days. Slim, retrospective. -->
+          {outcomesHasData && (
+            <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+              <div class="flex items-baseline gap-3 mb-3">
+                <h3 class="font-serif text-base font-medium flex-1">Last 30 days</h3>
+                <span class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+                  Outcomes
+                </span>
+              </div>
+              <dl class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-3">
+                <div>
+                  <dt class="text-xs text-[color:var(--color-muted)]">Won</dt>
+                  <dd class="mt-0.5 font-serif text-[20px] font-medium tabular-nums leading-none">
+                    {last30Won.length}
+                  </dd>
+                  <dd class="text-[11px] font-mono text-[color:var(--color-good)] mt-1">
+                    {fmtCurrencyCompact(last30WonTotal)}
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-[color:var(--color-muted)]">Lost</dt>
+                  <dd class="mt-0.5 font-serif text-[20px] font-medium tabular-nums leading-none">
+                    {last30Lost.length}
+                  </dd>
+                  <dd class="text-[11px] font-mono text-[color:var(--color-muted)] mt-1">
+                    {fmtCurrencyCompact(last30LostTotal)}
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-[color:var(--color-muted)]">Avg close</dt>
+                  <dd class="mt-0.5 font-serif text-[20px] font-medium tabular-nums leading-none">
+                    {last30AvgCloseDays != null ? `${last30AvgCloseDays.toFixed(1)}d` : '—'}
+                  </dd>
+                  <dd class="text-[11px] font-mono text-[color:var(--color-muted)] mt-1">
+                    on won quotes
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-[color:var(--color-muted)]">Avg margin</dt>
+                  <dd class="mt-0.5 font-serif text-[20px] font-medium tabular-nums leading-none">
+                    {last30AvgMargin != null ? `${last30AvgMargin.toFixed(1)}%` : '—'}
+                  </dd>
+                  <dd class="text-[11px] font-mono text-[color:var(--color-muted)] mt-1">
+                    on won quotes
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          )}
+
+          <!-- What you almost missed — curated retrospective signals. -->
           <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
-            <h3 class="font-serif text-base font-medium mb-3">Recent activity</h3>
-            {(events ?? []).length === 0 ? (
-              <p class="text-sm italic font-serif text-[color:var(--color-muted)]">
-                Nothing logged yet. Brief will populate this as quotes move.
+            <div class="flex items-center gap-2 mb-3">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-accent)]" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+                <circle cx="7" cy="7" r="5.5" />
+                <path d="M7 4v3.5l2 1.5" />
+              </svg>
+              <h3 class="font-serif text-base font-medium flex-1">What you almost missed</h3>
+              <span class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+                Brief watching
+              </span>
+            </div>
+            {misses.length === 0 ? (
+              <p class="text-sm italic font-serif text-[color:var(--color-muted)] leading-relaxed">
+                Nothing snuck past. Brief is watching for multi-opens with no follow-up,
+                responses that have gone quiet for a day, AWAITING quotes past their nudge
+                window, and jobs running over plan.
               </p>
             ) : (
-              <ol class="space-y-2.5">
-                {(events ?? []).map((e: any) => (
-                  <li class="flex items-baseline gap-3 text-sm">
-                    <span class="w-1.5 h-1.5 rounded-full bg-[color:var(--color-accent)] shrink-0" aria-hidden="true" />
-                    <span class="flex-1 min-w-0 truncate">
-                      {{
-                        'quote.sent': 'Sent',
-                        'quote.opened': 'Opened',
-                        'quote.responded': 'Client responded',
-                        'nudge.sent': 'Nudge sent',
-                        'quote.won': 'Marked won',
-                        'quote.lost': 'Marked lost',
-                      }[e.type as string] ?? e.type}
-                    </span>
-                    <time
-                      datetime={e.created_at}
-                      class="text-xs text-[color:var(--color-muted)] font-mono shrink-0"
+              <ol class="divide-y divide-[color:var(--color-line)]">
+                {misses.map((m) => (
+                  <li class="py-3 first:pt-0 last:pb-0 flex items-start gap-3">
+                    <div class="w-7 h-7 rounded-full bg-[color:var(--color-bg-2)] text-[color:var(--color-ink-2)] grid place-items-center text-[10.5px] font-serif font-semibold shrink-0">
+                      {initials(m.client_name)}
+                    </div>
+                    <div class="flex-1 min-w-0">
+                      <div class="text-sm leading-snug">{m.headline}</div>
+                      <div class="text-xs text-[color:var(--color-muted)] mt-1 leading-relaxed">
+                        {m.detail}
+                      </div>
+                    </div>
+                    <a
+                      href={m.href}
+                      class={[
+                        'inline-flex items-center px-3 py-1.5 rounded-md text-xs font-medium shrink-0 transition-colors',
+                        m.kind === 'cold-response' || m.kind === 'multi-open'
+                          ? 'bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] hover:brightness-95'
+                          : 'bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] text-[color:var(--color-ink)] hover:bg-[color:var(--color-surface-2)]',
+                      ].join(' ')}
                     >
-                      {fmtRelativeDate(e.created_at)}
-                    </time>
+                      {m.cta}
+                    </a>
                   </li>
                 ))}
               </ol>
