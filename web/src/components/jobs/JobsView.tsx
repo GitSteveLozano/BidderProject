@@ -257,25 +257,28 @@ function Tile(p: { label: string; value: string; sub?: string; valueClass?: stri
 }
 
 function EmptyJobs() {
+  // Per design/mockups/01-list-detail.png — editorial empty card with
+  // page-level H1 ("Did the job land where we bid it?") sitting above.
   return (
-    <div class="mx-auto max-w-[480px] text-center py-16 px-6">
-      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
-        Cold start
+    <article class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 sm:p-14 max-w-[760px]">
+      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-3">
+        Jobs · Empty
       </div>
-      <h2 class="font-serif text-[24px] font-medium leading-tight">
-        Jobs land here after you win a quote.
+      <h2 class="font-serif text-[32px] sm:text-[40px] font-medium leading-tight">
+        Nothing on the schedule.
       </h2>
-      <p class="mt-3 text-sm text-[color:var(--color-muted)] leading-relaxed">
-        Mark any quote as won from the Quotes view and the job opens up here — schedule, crew, costs, all of it.
+      <p class="mt-4 text-[15px] text-[color:var(--color-ink-2)] leading-relaxed font-serif max-w-[55ch]">
+        A job opens when a client signs. From there Brief tracks labor against bid, materials against bid, schedule against promise — and tells you, gently, when the variance starts to add up.
       </p>
-      <div class="mt-6">
+      <div class="mt-7">
         <a
-          href="/quotes"
-          class="inline-flex items-center px-4 py-2 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-sm font-medium hover:brightness-95"
+          href="/generate"
+          class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-sm font-medium hover:brightness-95"
         >
-          Go to Quotes →
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" /></svg>
+          New quote
         </a>
       </div>
-    </div>
+    </article>
   );
 }
