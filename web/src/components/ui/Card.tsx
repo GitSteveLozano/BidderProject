@@ -31,10 +31,13 @@ export const Card: ParentComponent<CardProps> = (props) => (
   </div>
 );
 
-export const CardHeader: ParentComponent<{ class?: string }> = (props) => (
+export const CardHeader: ParentComponent<{ class?: string; id?: string }> = (props) => (
   <div
+    id={props.id}
     class={[
       'flex items-center gap-2.5 px-5 py-3.5 border-b border-[color:var(--color-line)]',
+      // Anchor offset so `#id` jumps don't bury the header behind the top chrome.
+      'scroll-mt-6',
       props.class ?? '',
     ].join(' ')}
   >
