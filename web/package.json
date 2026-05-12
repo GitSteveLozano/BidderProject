@@ -12,7 +12,6 @@
     "typecheck": "astro check && tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.40.0",
     "@astrojs/check": "^0.9.4",
     "@astrojs/cloudflare": "^11.2.0",
     "@astrojs/solid-js": "^4.4.4",

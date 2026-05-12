@@ -1,80 +1,49 @@
 /**
  * POST /api/voice/analyze
  *
- * Streams Claude tool-use over an uploaded document (PDF, TXT, MD,
- * email) and emits voice signals (tone, preferred terms, boilerplate
- * snippets) as SSE events.
- *
- * Per design/agent-port-notes.md → Intake — this is the real Claude
- * integration, no stub. Input: { content: string } (the text Claude
- * should read; client pre-extracts from upload). Output:
- *   data: {"type":"progress","percent":42}
- *   data: {"type":"signal","payload":{kind:"tone"|"preferred_terms"|"boilerplate_intro"|...,value:any,evidence:string}}
- *   data: {"type":"done","payload":{summary:{...}}}
+ * Reads an uploaded writing sample (a past quote, email, or proposal)
+ * and extracts voice patterns into a structured profile. SSE events:
+ *   data: {"type":"progress","percent":N}
+ *   data: {"type":"signal","payload":{kind,value,evidence?}}
+ *   data: {"type":"done","payload":{profile,signal_count}}
  *   data: {"type":"error","message":string}
+ *
+ * Was previously Anthropic tool-use streaming (one tool call per
+ * finding, progressive emit). Now runs on Cloudflare Workers AI with
+ * a JSON-mode prompt — Workers AI's tool support is more limited, so
+ * we ask for a single JSON array of signals and stream-then-parse.
+ * Operator-perceived UX is unchanged (progress bar advances while
+ * Brief reads; signals appear when the analysis lands).
  */
 import type { APIRoute } from 'astro';
-import Anthropic from '@anthropic-ai/sdk';
 
 import { client as supabaseService } from '@/lib/supabase';
+import { streamText } from '@/lib/ai';
 
 export const prerender = false;
 
 const SYSTEM_PROMPT = `You analyze a contractor's writing sample (a past quote,
-email, or proposal) and extract voice patterns. You emit one tool call per
-finding so the UI can render results progressively.
+email, or proposal) and extract voice patterns. Return ONLY a JSON object of
+the exact shape below — no fences, no preamble, no closing remarks.
 
-Findings you should look for:
-  - tone: the overall register (direct, formal, warm, terse, conversational...)
-  - preferred_terms: domain vocabulary the contractor uses repeatedly
-  - avoided_terms: marketing-speak or jargon they conspicuously don't use
-  - sentence_length: typical sentence length (short, medium, long)
-  - boilerplate_intro: their standard greeting/intro paragraph (verbatim if used 2+ times)
-  - boilerplate_closing: their standard sign-off
-  - boilerplate_warranty: warranty/terms language
-  - boilerplate_terms: payment/terms language
+{
+  "signals": [
+    {
+      "kind": "tone" | "preferred_terms" | "avoided_terms" | "sentence_length"
+            | "boilerplate_intro" | "boilerplate_closing"
+            | "boilerplate_warranty" | "boilerplate_terms",
+      "value": "string — for preferred_terms / avoided_terms use a comma-separated string",
+      "evidence": "string — a quoted excerpt ≤ 120 chars from the source (optional)"
+    }
+  ]
+}
 
-Quote evidence from the source whenever possible.
-
-Do NOT invent findings — if the sample doesn't contain a signal for a category,
-skip it. Aim for 4-8 findings total. After your final tool call, conclude
-with a brief 2-3 sentence summary in plain text.`;
-
-const TOOLS: Anthropic.Tool[] = [
-  {
-    name: 'record_signal',
-    description:
-      'Record a single voice/tone signal extracted from the source document. ' +
-      'Call once per finding.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        kind: {
-          type: 'string',
-          enum: [
-            'tone',
-            'preferred_terms',
-            'avoided_terms',
-            'sentence_length',
-            'boilerplate_intro',
-            'boilerplate_closing',
-            'boilerplate_warranty',
-            'boilerplate_terms',
-          ],
-        },
-        value: {
-          type: 'string',
-          description: 'The signal value. For lists (preferred_terms, avoided_terms), use a comma-separated string.',
-        },
-        evidence: {
-          type: 'string',
-          description: 'A short quoted excerpt (<= 120 chars) from the source that supports this signal.',
-        },
-      },
-      required: ['kind', 'value'],
-    },
-  },
-];
+Guidelines:
+- 4-8 signals total — quality over coverage.
+- Only emit a signal when the source supports it; do NOT invent.
+- For boilerplate signals, include the actual sentence the contractor used
+  (verbatim if it appears 2+ times).
+- Quote evidence from the source whenever possible.`;
 
 export const POST: APIRoute = async ({ request, locals }) => {
   const env = locals.runtime?.env;
@@ -82,8 +51,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
   if (!locals.user || !locals.membership) {
     return new Response('Not authenticated', { status: 401 });
   }
-  if (!env.ANTHROPIC_API_KEY) {
-    return new Response('ANTHROPIC_API_KEY not configured', { status: 500 });
+  if (!env.AI) {
+    return new Response('Workers AI binding not configured', { status: 500 });
   }
 
   let body: { content?: string; voice_sample_url?: string };
@@ -95,57 +64,43 @@ export const POST: APIRoute = async ({ request, locals }) => {
   if (!body.content || body.content.trim().length < 50) {
     return new Response('content too short (need ≥50 chars to analyze)', { status: 400 });
   }
-  const content = body.content.slice(0, 12000); // bound the input
-
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  const content = body.content.slice(0, 12000);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const signals: Array<{ kind: string; value: string; evidence?: string }> = [];
-
-      const emit = (event: object) => {
+      const emit = (event: object) =>
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-      };
 
       try {
         emit({ type: 'progress', percent: 5 });
 
-        const model = env.DEFAULT_MODEL_SONNET ?? 'claude-sonnet-4-6';
-        const msg = client.messages.stream({
-          model,
+        // Stream the JSON response so the progress bar advances while
+        // Brief reads. We accumulate the text + parse at the end.
+        let full = '';
+        let lastPercent = 5;
+        for await (const chunk of streamText(env, {
           max_tokens: 2000,
           temperature: 0.3,
-          system: SYSTEM_PROMPT,
-          tools: TOOLS,
-          tool_choice: { type: 'auto' },
           messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
             {
               role: 'user',
               content:
-                `Analyze this writing sample and emit one tool call per voice signal you find.\n\n--- SAMPLE ---\n${content}\n--- END SAMPLE ---`,
+                `Analyze this writing sample and return the JSON.\n\n--- SAMPLE ---\n${content}\n--- END SAMPLE ---`,
             },
           ],
-        });
-
-        let lastPercent = 5;
-        msg.on('inputJson', () => {
-          // Bump progress as tool calls arrive
-          lastPercent = Math.min(lastPercent + 8, 90);
+        })) {
+          full += chunk;
+          lastPercent = Math.min(lastPercent + 4, 90);
           emit({ type: 'progress', percent: lastPercent });
-        });
-
-        const final = await msg.finalMessage();
-
-        for (const block of final.content) {
-          if (block.type === 'tool_use' && block.name === 'record_signal') {
-            const input = block.input as { kind: string; value: string; evidence?: string };
-            signals.push(input);
-            emit({ type: 'signal', payload: input });
-          }
         }
 
-        // Distill into a voice profile to persist
+        const signals = parseSignals(full);
+        for (const s of signals) {
+          emit({ type: 'signal', payload: s });
+        }
+
         const profile = buildProfile(signals);
         const shopId = locals.membership!.shop_id;
         const svc = supabaseService(env, 'service');
@@ -173,12 +128,38 @@ export const POST: APIRoute = async ({ request, locals }) => {
     headers: {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache, no-store',
-      'connection': 'keep-alive',
+      connection: 'keep-alive',
     },
   });
 };
 
-function buildProfile(signals: Array<{ kind: string; value: string; evidence?: string }>) {
+interface Signal {
+  kind: string;
+  value: string;
+  evidence?: string;
+}
+
+function parseSignals(text: string): Signal[] {
+  // Tolerant JSON extract — strip fences if present, find the first
+  // {...} block, JSON.parse, pluck signals.
+  const fenced = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  const payload = fenced ? fenced[1] : text.match(/\{[\s\S]*\}/)?.[0] ?? text;
+  try {
+    const parsed = JSON.parse(payload);
+    const arr = Array.isArray(parsed.signals) ? parsed.signals : [];
+    return arr
+      .filter((s: any) => s && typeof s.kind === 'string' && typeof s.value === 'string')
+      .map((s: any) => ({
+        kind: s.kind,
+        value: String(s.value),
+        evidence: typeof s.evidence === 'string' ? s.evidence : undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function buildProfile(signals: Signal[]) {
   const byKind: Record<string, string[]> = {};
   for (const s of signals) {
     (byKind[s.kind] ??= []).push(s.value);

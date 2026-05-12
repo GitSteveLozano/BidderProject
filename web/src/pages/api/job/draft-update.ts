@@ -4,12 +4,12 @@
  * SSE-streamed status update from contractor → client for an
  * in-flight job. Pattern mirrors /api/quote/draft-reply and
  * /api/quote/draft-nudge — same SSE event types (subject, token,
- * done, error), same Brief-voice system prompt shape.
+ * done, error). Runs on Cloudflare Workers AI.
  */
 import type { APIRoute } from 'astro';
-import Anthropic from '@anthropic-ai/sdk';
 
 import { client as supabaseService } from '@/lib/supabase';
+import { streamText } from '@/lib/ai';
 
 export const prerender = false;
 
@@ -20,13 +20,14 @@ project specifics. End with one concrete next step (e.g. "I'll send photos
 Friday" or "Confirm color by Tuesday").
 
 Length: 4-7 sentences. Builder-to-builder tone — no marketing language, no
-"reach out" / "circle back". Sign off with the owner's first name.`;
+"reach out" / "circle back". Sign off with the owner's first name. Return
+only the body text — no preamble like "Here's the update:".`;
 
 export const POST: APIRoute = async ({ request, locals }) => {
   const env = locals.runtime?.env;
   if (!env) return new Response('Cloudflare runtime not available', { status: 500 });
   if (!locals.user || !locals.membership) return new Response('Not authenticated', { status: 401 });
-  if (!env.ANTHROPIC_API_KEY) return new Response('ANTHROPIC_API_KEY not configured', { status: 500 });
+  if (!env.AI) return new Response('Workers AI binding not configured', { status: 500 });
 
   let body: { job_id?: string };
   try {
@@ -57,11 +58,11 @@ export const POST: APIRoute = async ({ request, locals }) => {
   const aheadOrBehind =
     variance == null ? 'on track' : variance < -2 ? 'ahead of plan' : variance > 5 ? 'running long' : 'on track';
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const emit = (event: object) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      const emit = (event: object) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       try {
         emit({ type: 'subject', text: `Update — ${j.project_title}` });
         const userMsg =
@@ -74,16 +75,16 @@ export const POST: APIRoute = async ({ request, locals }) => {
           (closing ? `Closing line to end with: ${closing}\n` : '') +
           `\nWrite the update.`;
 
-        const model = env.DEFAULT_MODEL_SONNET ?? 'claude-sonnet-4-6';
-        const msg = client.messages.stream({
-          model,
+        for await (const chunk of streamText(env, {
           max_tokens: 700,
           temperature: 0.45,
-          system: SYSTEM,
-          messages: [{ role: 'user', content: userMsg }],
-        });
-        msg.on('text', (text: string) => emit({ type: 'token', text }));
-        await msg.finalMessage();
+          messages: [
+            { role: 'system', content: SYSTEM },
+            { role: 'user', content: userMsg },
+          ],
+        })) {
+          emit({ type: 'token', text: chunk });
+        }
         emit({ type: 'done' });
         controller.close();
       } catch (err) {

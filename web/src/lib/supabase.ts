@@ -20,6 +20,10 @@ export interface CloudflareEnv {
   SUPABASE_SERVICE_KEY?: string;
   DEFAULT_MODEL_HAIKU?: string;
   DEFAULT_MODEL_SONNET?: string;
+  // Default Workers AI model for drafting endpoints. Override to pick
+  // a different model — e.g. `@cf/meta/llama-4-scout-17b-16e-instruct`
+  // — without code changes.
+  DEFAULT_WORKERS_AI_MODEL?: string;
   // Cloudflare Workers AI binding — used by /api/intake/transcribe
   // and /api/intake/extract-pdf. Bound in the Pages dashboard.
   AI?: {

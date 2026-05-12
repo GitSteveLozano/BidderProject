@@ -5,12 +5,12 @@
  * operator wants to ping the client about an upcoming milestone —
  * site visit, color approval, sign-off — without a full status
  * update. Tone is softer and more coordination-oriented than
- * /api/job/draft-update.
+ * /api/job/draft-update. Runs on Cloudflare Workers AI.
  */
 import type { APIRoute } from 'astro';
-import Anthropic from '@anthropic-ai/sdk';
 
 import { client as supabaseService } from '@/lib/supabase';
+import { streamText } from '@/lib/ai';
 
 export const prerender = false;
 
@@ -21,13 +21,14 @@ reference the project, propose a concrete window for the next interaction,
 and make it easy for the client to say yes.
 
 Length: 3-5 sentences. No marketing language. No exclamation marks. Sign off
-with the owner's first name.`;
+with the owner's first name. Return only the body text — no preamble like
+"Here's the check-in:".`;
 
 export const POST: APIRoute = async ({ request, locals }) => {
   const env = locals.runtime?.env;
   if (!env) return new Response('Cloudflare runtime not available', { status: 500 });
   if (!locals.user || !locals.membership) return new Response('Not authenticated', { status: 401 });
-  if (!env.ANTHROPIC_API_KEY) return new Response('ANTHROPIC_API_KEY not configured', { status: 500 });
+  if (!env.AI) return new Response('Workers AI binding not configured', { status: 500 });
 
   let body: { job_id?: string };
   try {
@@ -53,11 +54,11 @@ export const POST: APIRoute = async ({ request, locals }) => {
     .maybeSingle();
   const ownerFirst = (shop?.owner_name ?? '').split(' ')[0];
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const emit = (event: object) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      const emit = (event: object) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       try {
         emit({ type: 'subject', text: `Quick check-in — ${j.project_title}` });
         const userMsg =
@@ -67,15 +68,16 @@ export const POST: APIRoute = async ({ request, locals }) => {
           (j.scheduled_end ? `Scheduled end: ${j.scheduled_end}\n` : '') +
           `Sign as: ${ownerFirst}\n\nWrite the check-in.`;
 
-        const msg = client.messages.stream({
-          model: env.DEFAULT_MODEL_SONNET ?? 'claude-sonnet-4-6',
+        for await (const chunk of streamText(env, {
           max_tokens: 500,
           temperature: 0.5,
-          system: SYSTEM,
-          messages: [{ role: 'user', content: userMsg }],
-        });
-        msg.on('text', (text: string) => emit({ type: 'token', text }));
-        await msg.finalMessage();
+          messages: [
+            { role: 'system', content: SYSTEM },
+            { role: 'user', content: userMsg },
+          ],
+        })) {
+          emit({ type: 'token', text: chunk });
+        }
         emit({ type: 'done' });
         controller.close();
       } catch (err) {
