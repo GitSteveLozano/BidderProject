@@ -12,11 +12,14 @@
     "typecheck": "astro check && tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
     "@astrojs/check": "^0.9.4",
     "@astrojs/cloudflare": "^11.2.0",
     "@astrojs/solid-js": "^4.4.4",
     "@astrojs/tailwind": "^5.1.4",
-    "@anthropic-ai/sdk": "^0.40.0",
+    "@fontsource-variable/geist": "^5.2.8",
+    "@fontsource-variable/geist-mono": "^5.2.7",
+    "@fontsource/newsreader": "^5.2.10",
     "@supabase/supabase-js": "^2.46.0",
     "astro": "^4.16.18",
     "solid-js": "^1.9.3",
