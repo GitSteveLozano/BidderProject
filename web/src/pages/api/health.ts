@@ -5,10 +5,13 @@
  * Reports:
  *   - env var presence (set / missing)
  *   - which Supabase project is being hit (the URL's project ref)
- *   - reachability + companies_count
- *   - which bidintel tables exist
- *   - first 3 company rows (for cross-checking)
+ *   - reachability + shops_count
+ *   - which Brief tables exist
+ *   - first 3 shop rows (for cross-checking which DB you're pointed at)
  *   - nodejs_compat status
+ *
+ * Kept as a permanent regression probe — the cf-cache-status / shape of
+ * this response is referenced from incident postmortems. Don't break it.
  */
 
 import type { APIRoute } from 'astro';
@@ -41,9 +44,9 @@ export const GET: APIRoute = async ({ locals }) => {
   const supabase: {
     ok: boolean;
     project_ref?: string | null;
-    companies_count?: number;
+    shops_count?: number;
     tables_seen?: string[];
-    company_samples?: Array<{ id: string; name: string }>;
+    shop_samples?: Array<{ id: string; legal_name: string; data_state: string }>;
     error?: string;
   } = { ok: false, project_ref: projectRef };
 
@@ -52,31 +55,30 @@ export const GET: APIRoute = async ({ locals }) => {
       const sb = supabaseClient(env, 'service');
 
       const { count, error: countErr } = await sb
-        .from('companies')
+        .from('shops')
         .select('*', { count: 'exact', head: true });
       if (countErr) {
-        supabase.error = `companies count: ${countErr.message} (code=${countErr.code})`;
+        supabase.error = `shops count: ${countErr.message} (code=${countErr.code})`;
       } else {
-        supabase.companies_count = count ?? 0;
+        supabase.shops_count = count ?? 0;
       }
 
-      // Sample the first 3 companies so you can cross-check against the
-      // Supabase Table Editor — confirms which project is actually being hit.
-      const { data: companies } = await sb
-        .from('companies')
-        .select('id, name')
-        .order('name')
+      // Sample first 3 shops so you can cross-check against the Supabase
+      // Table Editor — confirms which project is actually being hit.
+      const { data: shops } = await sb
+        .from('shops')
+        .select('id, legal_name, data_state')
+        .order('legal_name')
         .limit(3);
-      supabase.company_samples = companies ?? [];
+      supabase.shop_samples = shops ?? [];
 
-      // List the bidintel tables we expect to find. Using information_schema
-      // would be cleaner but PostgREST doesn't expose it by default — we
-      // probe each table individually with a head-only count to see what
-      // responds.
+      // Probe the Brief tables. PostgREST doesn't expose information_schema
+      // by default, so we hit each table with a head-only count to see
+      // what responds.
       const expectedTables = [
-        'companies', 'service_lines', 'employees', 'burden_components',
-        'bids', 'job_cost_reconciliation', 'voice_patterns', 'pricing_logic',
-        'schedule_allocations', 'intelligence_insights',
+        'shops', 'memberships', 'invites',
+        'clients', 'quotes', 'quote_line_items', 'quote_messages',
+        'jobs', 'job_cost_lines', 'events',
       ];
       const seen: string[] = [];
       await Promise.all(
@@ -86,8 +88,7 @@ export const GET: APIRoute = async ({ locals }) => {
         }),
       );
       supabase.tables_seen = seen;
-      supabase.ok =
-        countErr == null && supabase.companies_count != null;
+      supabase.ok = countErr == null && supabase.shops_count != null;
     } catch (e) {
       supabase.error = e instanceof Error ? e.message : String(e);
     }
@@ -101,7 +102,7 @@ export const GET: APIRoute = async ({ locals }) => {
     envStatus.SUPABASE_SERVICE_KEY === 'set' &&
     envStatus.ANTHROPIC_API_KEY === 'set' &&
     supabase.ok &&
-    (supabase.companies_count ?? 0) > 0 &&
+    (supabase.shops_count ?? 0) > 0 &&
     nodeCompat === 'yes';
 
   return new Response(
@@ -116,9 +117,8 @@ export const GET: APIRoute = async ({ locals }) => {
         'content-type': 'application/json',
         // Diagnostic endpoint — never serve from edge cache or
         // browser cache. Cloudflare aggressively caches successful
-        // JSON responses by default, which masked our debugging
-        // when companies_count flipped from 0 to 15 in the DB but
-        // /api/health kept returning the stale 0 result.
+        // JSON responses by default, which has masked debugging in
+        // the past.
         'cache-control': 'no-store, no-cache, must-revalidate, max-age=0',
         'cdn-cache-control': 'no-store',
       },
