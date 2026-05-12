@@ -1,0 +1,85 @@
+---
+/**
+ * /auth/callback (GET) — landing page after Google OAuth redirects back.
+ *
+ * Supabase puts tokens in the URL hash (#) which the server never sees,
+ * so we read them client-side and POST to /api/auth/exchange. That
+ * endpoint sets HttpOnly cookies and creates the shop+membership on
+ * first sign-in.
+ */
+import Base from '@/layouts/Base.astro';
+
+export const prerender = false;
+Astro.response.headers.set('cache-control', 'no-store');
+
+const next = Astro.url.searchParams.get('next') ?? '/dashboard';
+const error = Astro.url.searchParams.get('error_description');
+---
+
+<Base title="Signing you in">
+  <section class="mx-auto max-w-md py-20 px-4 text-center">
+    {error ? (
+      <div>
+        <h1 class="font-serif text-[28px] font-medium">Sign-in didn't complete.</h1>
+        <p class="mt-3 text-sm text-[color:var(--color-muted)]">{error}</p>
+        <a
+          href="/auth/signin"
+          class="mt-6 inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] font-medium text-[13px] hover:brightness-95"
+        >
+          Try again
+        </a>
+      </div>
+    ) : (
+      <div>
+        <h1 class="font-serif text-[28px] font-medium">Almost there.</h1>
+        <p class="mt-3 text-sm text-[color:var(--color-muted)]">
+          One moment — finishing sign-in.
+        </p>
+        <noscript>
+          <p class="mt-4 text-sm text-[color:var(--color-danger)]">
+            Brief needs JavaScript to complete sign-in. Please enable it and try again.
+          </p>
+        </noscript>
+      </div>
+    )}
+  </section>
+</Base>
+
+<script define:vars={{ next }}>
+  (async () => {
+    const hash = window.location.hash.replace(/^#/, '');
+    if (!hash) return;
+    const params = new URLSearchParams(hash);
+    const access_token = params.get('access_token');
+    const refresh_token = params.get('refresh_token');
+    const provider_token = params.get('provider_token');
+    const provider_refresh_token = params.get('provider_refresh_token');
+    const expires_at = params.get('expires_at');
+    if (!access_token || !refresh_token) {
+      window.location.replace('/auth/signin?error=' + encodeURIComponent('Missing tokens'));
+      return;
+    }
+    const resp = await fetch('/api/auth/exchange', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        access_token,
+        refresh_token,
+        expires_at: expires_at ? Number(expires_at) : undefined,
+        provider_token: provider_token || undefined,
+        provider_refresh_token: provider_refresh_token || undefined,
+        next,
+      }),
+    });
+    if (!resp.ok) {
+      const t = await resp.text();
+      window.location.replace('/auth/signin?error=' + encodeURIComponent(t));
+      return;
+    }
+    const { redirect } = await resp.json();
+    window.location.replace(redirect || next || '/dashboard');
+  })().catch((err) => {
+    console.error('[auth/callback] bootstrap failed', err);
+    window.location.replace('/auth/signin?error=' + encodeURIComponent(String(err)));
+  });
+</script>

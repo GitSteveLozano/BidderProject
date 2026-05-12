@@ -14,6 +14,16 @@ declare global {
         caches?: unknown;
         ctx?: unknown;
       };
+      user?: {
+        id: string;
+        email?: string;
+        name?: string;
+        avatar_url?: string;
+      } | null;
+      membership?: {
+        shop_id: string;
+        role: 'owner' | 'admin' | 'member';
+      } | null;
     }
   }
 }

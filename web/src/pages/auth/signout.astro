@@ -1,0 +1,18 @@
+---
+/**
+ * /auth/signout
+ *
+ * Clears the session cookie and redirects to landing. Accepts either
+ * GET (link click) or POST (form submission with CSRF).
+ */
+import { clearSessionCookieHeader } from '@/lib/auth';
+
+export const prerender = false;
+
+const headers = new Headers();
+headers.set('set-cookie', clearSessionCookieHeader());
+headers.set('cache-control', 'no-store');
+headers.set('location', '/');
+
+return new Response(null, { status: 302, headers });
+---
