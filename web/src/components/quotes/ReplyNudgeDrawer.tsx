@@ -12,6 +12,7 @@ import { createEffect, createSignal, Show, onCleanup } from 'solid-js';
 import SlideOver from '@/components/ui/SlideOver';
 import Button from '@/components/ui/Button';
 import Field, { Input } from '@/components/ui/Field';
+import Pill from '@/components/ui/Pill';
 import type { AgendaQuote } from '@/lib/quote-helpers';
 
 interface Props {
@@ -19,6 +20,15 @@ interface Props {
   onClose: () => void;
   mode: 'reply' | 'nudge';
   quote: AgendaQuote | null;
+  /** Optional: most recent inbound message from the client (used in
+   * Reply mode to quote them above the draft, per design/mockups/
+   * 02-shop-license.png).
+   */
+  inbound?: {
+    sender: string;
+    sent_at: string;
+    body: string;
+  };
 }
 
 export default function ReplyNudgeDrawer(props: Props) {
@@ -150,20 +160,56 @@ export default function ReplyNudgeDrawer(props: Props) {
         </>
       }
     >
+      {/* Inbound message (Reply mode only, when we have it) */}
+      <Show when={props.mode === 'reply' && props.inbound}>
+        {(inbound) => (
+          <div class="mb-5">
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-2">
+              {inbound().sender} wrote · {inbound().sent_at}
+            </div>
+            <blockquote class="rounded-lg bg-[color:var(--color-surface-2)] border border-[color:var(--color-line)] px-4 py-3 text-sm font-serif italic leading-relaxed text-[color:var(--color-ink-2)] whitespace-pre-wrap">
+              "{inbound().body}"
+            </blockquote>
+          </div>
+        )}
+      </Show>
+
       <Field label="Subject">
         <Input value={subject()} onInput={(e) => setSubject(e.currentTarget.value)} />
       </Field>
       <div class="mt-4">
-        <Field label="Body">
-          <textarea
-            rows={14}
-            value={body()}
-            onInput={(e) => onBodyInput(e.currentTarget.value)}
-            class="w-full px-3 py-2.5 rounded-lg text-sm text-[color:var(--color-ink)] font-sans bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] focus:outline-none focus:border-[color:var(--color-accent)] focus:shadow-[0_0_0_3px_var(--color-accent-tint)] resize-y min-h-[240px] leading-relaxed"
-            placeholder={streaming() ? 'Drafting…' : ''}
-          />
-        </Field>
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="text-[11.5px] font-medium text-[color:var(--color-muted)] uppercase tracking-[0.06em] font-mono">
+            Draft · yours to edit
+          </span>
+          <span class="flex-1" />
+          <Pill tone="neutral" dot={false} size="sm">Not sent</Pill>
+        </div>
+        <textarea
+          rows={14}
+          value={body()}
+          onInput={(e) => onBodyInput(e.currentTarget.value)}
+          class="w-full px-3 py-2.5 rounded-lg text-sm text-[color:var(--color-ink)] font-sans bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] focus:outline-none focus:border-[color:var(--color-accent)] focus:shadow-[0_0_0_3px_var(--color-accent-tint)] resize-y min-h-[240px] leading-relaxed"
+          placeholder={streaming() ? 'Drafting…' : ''}
+          aria-label="Message body"
+        />
       </div>
+
+      {/* "Why this draft" reasoning panel — Nudge only, since replies
+          are already grounded in the inbound message. Mirrors
+          design/mockups/03-pricing.png. */}
+      <Show when={props.mode === 'nudge' && !streaming() && body().trim().length > 0}>
+        <div class="mt-4 rounded-lg bg-[color:var(--color-accent-tint)] px-4 py-3 flex gap-2.5">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-accent)] mt-0.5 shrink-0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+            <path d="M7 1l1.6 4.3h4.4l-3.5 2.8 1.3 4.3-3.8-2.6-3.8 2.6 1.3-4.3-3.5-2.8h4.4z" />
+          </svg>
+          <p class="text-[13px] leading-relaxed text-[color:var(--color-ink-2)] font-serif">
+            <strong class="font-medium">Why this draft.</strong>{' '}
+            {nudgeReasoning(props.quote)}
+          </p>
+        </div>
+      </Show>
+
       <Show when={error()}>
         <div class="mt-3 rounded-lg bg-[color:var(--color-danger-tint)] px-3 py-2 text-sm text-[color:var(--color-danger)]">
           {error()}
@@ -176,4 +222,19 @@ export default function ReplyNudgeDrawer(props: Props) {
       </Show>
     </SlideOver>
   );
+}
+
+/** Heuristic explanation for the Nudge tone, used in the
+ * "Why this draft" panel. Mirrors the cadence rules in
+ * design/agent-port-notes.md (Follow-up section). */
+function nudgeReasoning(quote: AgendaQuote | null): string {
+  if (!quote) return '';
+  const days = quote.age_days;
+  if (days < 3) {
+    return 'Sent recently; tone is soft and conversational. No hard close — just a check-in.';
+  }
+  if (days < 8) {
+    return `Quote landed ${days} days ago. Tone is direct and references the timeline so the client has a reason to reply.`;
+  }
+  return `It's been ${days} days. Final-touch tone — respectful but closes the loop if they don't come back.`;
 }

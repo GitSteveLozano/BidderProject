@@ -48,10 +48,10 @@ export default function AgendaList(props: Props) {
       <div class="flex items-end justify-between mb-6">
         <div>
           <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1">
-            Quotes
+            Pipeline
           </div>
-          <h1 class="font-serif text-[28px] font-medium leading-tight">
-            What's open.
+          <h1 class="font-serif text-[28px] font-medium leading-tight tracking-tight">
+            Quotes &amp; their lifecycles
           </h1>
         </div>
         <div class="inline-flex rounded-lg border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-0.5 text-xs">
@@ -294,13 +294,32 @@ function PipelineStrip(props: { pipeline: Record<QuoteState, { value: number; co
   ];
   const total = segments.reduce((s, seg) => s + (props.pipeline[seg.state]?.value ?? 0), 0);
 
+  const totalCount = segments.reduce(
+    (s, seg) => s + (props.pipeline[seg.state]?.count ?? 0),
+    0,
+  );
+  // Don't show the strip until there's anything in flight — cold-start
+  // is handled by ColdStartEmpty.
+  if (totalCount === 0) return null;
   return (
     <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-4">
-      <div class="flex h-2 rounded-full overflow-hidden mb-3" aria-label="Pipeline by state">
+      <div class="flex items-baseline gap-3 mb-3 flex-wrap">
+        <span class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
+          In flight
+        </span>
+        <span class="font-serif text-[22px] font-medium tabular-nums leading-none">
+          {fmtCurrencyCompact(total)}
+        </span>
+        <span class="text-sm text-[color:var(--color-muted)] italic font-serif">
+          across {totalCount} {totalCount === 1 ? 'quote' : 'quotes'}
+        </span>
+      </div>
+      <div class="flex h-1.5 rounded-full overflow-hidden mb-2.5" aria-label="Pipeline by state">
         <For each={segments}>
           {(seg) => {
             const val = props.pipeline[seg.state]?.value ?? 0;
-            const pct = total > 0 ? (val / total) * 100 : 25;
+            const pct = total > 0 ? (val / total) * 100 : 0;
+            if (pct === 0) return null;
             return (
               <div
                 class={[
@@ -310,27 +329,33 @@ function PipelineStrip(props: { pipeline: Record<QuoteState, { value: number; co
                   seg.state === 'AWAITING' ? 'bg-[color:var(--color-warn)]' : '',
                   seg.state === 'RESPONDED' ? 'bg-[color:var(--color-accent)]' : '',
                 ].join(' ')}
-                style={{ width: `${total > 0 ? pct : 25}%`, 'min-width': '4px' }}
+                style={{ width: `${pct}%`, 'min-width': '4px' }}
                 title={`${seg.label}: ${fmtCurrencyFull(val)}`}
               />
             );
           }}
         </For>
       </div>
-      <div class="grid grid-cols-4 gap-4 text-sm">
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[color:var(--color-muted)]">
         <For each={segments}>
           {(seg) => {
             const data = props.pipeline[seg.state] ?? { value: 0, count: 0 };
+            if (data.count === 0) return null;
             return (
-              <div>
-                <StatusPill state={seg.state} size="sm" />
-                <div class="mt-1 font-serif text-[18px] font-medium tabular-nums">
-                  {fmtCurrencyCompact(data.value)}
-                </div>
-                <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
-                  {data.count} {data.count === 1 ? 'quote' : 'quotes'}
-                </div>
-              </div>
+              <span class="inline-flex items-center gap-1.5">
+                <span
+                  class={[
+                    'w-1.5 h-1.5 rounded-sm shrink-0',
+                    seg.state === 'DRAFT' ? 'bg-[color:var(--color-muted-2)]' : '',
+                    seg.state === 'SENT' ? 'bg-[color:var(--color-info)]' : '',
+                    seg.state === 'AWAITING' ? 'bg-[color:var(--color-warn)]' : '',
+                    seg.state === 'RESPONDED' ? 'bg-[color:var(--color-accent)]' : '',
+                  ].join(' ')}
+                  aria-hidden="true"
+                />
+                {seg.label}
+                <span class="font-mono tabular-nums">{data.count}</span>
+              </span>
             );
           }}
         </For>
