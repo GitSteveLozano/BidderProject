@@ -1,0 +1,196 @@
+---
+import Brief from '@/layouts/Brief.astro';
+import StatusPill from '@/components/ui/StatusPill';
+import { client as supabaseService } from '@/lib/supabase';
+import { fmtCurrencyFull, fmtRelativeDate } from '@/lib/quote-helpers';
+
+export const prerender = false;
+Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
+Astro.response.headers.set('cdn-cache-control', 'no-store');
+
+const env = Astro.locals.runtime?.env;
+const user = Astro.locals.user;
+const membership = Astro.locals.membership;
+if (!user || !membership || !env) {
+  return Astro.redirect('/auth/signin?next=' + encodeURIComponent(Astro.url.pathname));
+}
+
+const id = Astro.params.id;
+if (!id) return Astro.redirect('/quotes');
+
+const svc = supabaseService(env, 'service');
+const { data: quote } = await svc
+  .from('quotes')
+  .select('*, quote_line_items(id, position, description, qty, unit, unit_price, subtotal, category, confidence)')
+  .eq('id', id)
+  .eq('shop_id', membership.shop_id)
+  .maybeSingle();
+
+if (!quote) return Astro.redirect('/quotes?error=not-found');
+
+const { data: events } = await svc
+  .from('events')
+  .select('id, type, actor, payload, created_at')
+  .eq('quote_id', id)
+  .order('created_at', { ascending: false })
+  .limit(50);
+
+const { data: messages } = await svc
+  .from('quote_messages')
+  .select('*')
+  .eq('quote_id', id)
+  .order('created_at', { ascending: false })
+  .limit(20);
+
+const lineItems = (quote.quote_line_items ?? []).sort((a: any, b: any) => a.position - b.position);
+
+const { data: shop } = await svc
+  .from('shops')
+  .select('legal_name, trade_name, owner_name, data_state')
+  .eq('id', membership.shop_id)
+  .maybeSingle();
+const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
+const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
+
+const eventLabels: Record<string, string> = {
+  'quote.sent': 'Sent',
+  'quote.opened': 'Opened',
+  'quote.responded': 'Client responded',
+  'nudge.sent': 'Nudge sent',
+  'quote.won': 'Marked won',
+  'quote.lost': 'Marked lost',
+};
+---
+
+<Brief
+  title={`${quote.client_name} · ${quote.ref}`}
+  active="quotedetail"
+  shopLabel={shopLabel}
+  shopInitial={shopLabel.charAt(0).toUpperCase()}
+  ownerFirst={ownerFirst}
+  ownerRole={membership.role.charAt(0).toUpperCase() + membership.role.slice(1)}
+  dataState={shop?.data_state ?? 'cold-start'}
+>
+  <a href="/quotes" class="text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)]">
+    ← All quotes
+  </a>
+
+  <div class="mt-4 grid grid-cols-[1fr_320px] gap-8">
+    <div>
+      <div class="flex items-center gap-3 text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+        <span class="font-medium tracking-[0.08em]">{quote.ref}</span>
+        <StatusPill state={quote.state} size="sm" />
+        <span class="italic font-serif text-[color:var(--color-muted)]">
+          {quote.relationship ?? 'new'} client
+        </span>
+      </div>
+      <h1 class="mt-2 font-serif text-[32px] font-medium leading-tight">
+        {quote.client_name}
+      </h1>
+      <p class="mt-1 text-[color:var(--color-muted)] text-sm">
+        {quote.project_title}
+        {quote.project_address ? ` · ${quote.project_address}` : ''}
+      </p>
+
+      {quote.scope_summary && (
+        <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-2">Scope</div>
+          <p class="font-serif text-[15px] leading-relaxed text-[color:var(--color-ink-2)]">
+            {quote.scope_summary}
+          </p>
+        </div>
+      )}
+
+      <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
+        <div class="px-5 py-3.5 border-b border-[color:var(--color-line)] flex items-center gap-2.5">
+          <h3 class="font-serif text-base font-medium flex-1">Line items</h3>
+        </div>
+        <table class="w-full">
+          <thead class="bg-[color:var(--color-surface-2)]">
+            <tr>
+              <th class="px-3.5 py-2.5 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Description</th>
+              <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Qty</th>
+              <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Unit</th>
+              <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Subtotal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lineItems.map((li: any) => (
+              <tr class="border-t border-[color:var(--color-line)]">
+                <td class="px-3.5 py-3 text-sm">{li.description}</td>
+                <td class="px-3.5 py-3 text-right text-sm font-mono tabular-nums">
+                  {Number(li.qty).toLocaleString()}
+                </td>
+                <td class="px-3.5 py-3 text-right text-xs font-mono text-[color:var(--color-muted)]">
+                  {li.unit ?? ''}
+                </td>
+                <td class="px-3.5 py-3 text-right text-sm font-mono tabular-nums">
+                  {fmtCurrencyFull(Number(li.subtotal))}
+                </td>
+              </tr>
+            ))}
+            <tr class="border-t-2 border-[color:var(--color-ink)] bg-[color:var(--color-surface-2)]">
+              <td colspan="3" class="px-3.5 py-3 text-right font-medium">Total</td>
+              <td class="px-3.5 py-3 text-right font-serif text-[18px] tabular-nums">
+                {fmtCurrencyFull(Number(quote.total))}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <aside class="space-y-6">
+      <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+        <h3 class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-3">Activity</h3>
+        {(events ?? []).length === 0 ? (
+          <p class="text-sm italic font-serif text-[color:var(--color-muted)]">
+            Nothing recorded yet. Brief will let you know when {quote.client_contact_name ?? 'they'} open this.
+          </p>
+        ) : (
+          <ol class="space-y-3">
+            {(events ?? []).map((e: any) => (
+              <li class="flex items-start gap-3 text-sm">
+                <div
+                  class="mt-2 w-1.5 h-1.5 rounded-full bg-[color:var(--color-accent)] shrink-0"
+                  aria-hidden="true"
+                />
+                <div class="flex-1 min-w-0">
+                  <div>{eventLabels[e.type] ?? e.type}</div>
+                  <time
+                    datetime={e.created_at}
+                    class="text-xs text-[color:var(--color-muted)] mt-0.5 block"
+                  >
+                    {fmtRelativeDate(e.created_at)}
+                  </time>
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+
+      <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+        <h3 class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-3">Messages</h3>
+        {(messages ?? []).length === 0 ? (
+          <p class="text-sm italic font-serif text-[color:var(--color-muted)]">No messages on this quote yet.</p>
+        ) : (
+          <ol class="space-y-3">
+            {(messages ?? []).map((m: any) => (
+              <li class="rounded-lg bg-[color:var(--color-surface-2)] px-3 py-2 text-sm">
+                <div class="text-xs text-[color:var(--color-muted)] flex justify-between">
+                  <span>{m.direction === 'outbound' ? 'You' : quote.client_contact_name ?? 'Client'}</span>
+                  <time datetime={m.created_at}>{fmtRelativeDate(m.created_at)}</time>
+                </div>
+                {m.subject && <div class="mt-1 font-medium">{m.subject}</div>}
+                <div class="mt-1 whitespace-pre-wrap font-serif leading-relaxed text-[color:var(--color-ink-2)]">
+                  {m.body}
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </aside>
+  </div>
+</Brief>
