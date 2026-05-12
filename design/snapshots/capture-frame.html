@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { margin: 0; padding: 0; background: #0a0a0a; }
+    .stage { width: 1440px; height: 900px; transform-origin: top left; }
+    body.mobile .stage { width: 390px; height: 844px; }
+    #frame { border: 0; display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <div class="stage" id="stage"><iframe id="frame" src="Brief Prototype.html"></iframe></div>
+  <script>
+    const f = document.getElementById('frame');
+    const stage = document.getElementById('stage');
+    function fit() {
+      const dw = document.body.classList.contains('mobile') ? 390 : 1440;
+      const dh = document.body.classList.contains('mobile') ? 844 : 900;
+      const sw = window.innerWidth, sh = window.innerHeight;
+      const s = Math.min(sw/dw, sh/dh);
+      stage.style.transform = 'scale(' + s + ')';
+      stage.style.width = dw + 'px'; stage.style.height = dh + 'px';
+      document.body.style.width = sw + 'px'; document.body.style.height = sh + 'px';
+    }
+    window.addEventListener('resize', fit);
+    setTimeout(fit, 50);
+    window.cap = {
+      setMobile: (on) => { document.body.classList.toggle('mobile', !!on); fit(); },
+      setSize: (w, h) => { f.style.width = w + 'px'; f.style.height = h + 'px'; },
+      iwin: () => f.contentWindow,
+      idoc: () => f.contentDocument,
+      tweak: (obj) => f.contentWindow.briefSetTweak(obj),
+      route: (r) => f.contentWindow.briefSetRoute(r),
+      click: (sel) => { const el = f.contentDocument.querySelector(sel); el && el.click(); return !!el; },
+      ready: () => !!(f.contentWindow && f.contentWindow.briefSetTweak),
+    };
+  </script>
+</body>
+</html>
