@@ -15,6 +15,7 @@ import Button from '@/components/ui/Button';
 import { Card, CardHeader, CardBody, CardFooter } from '@/components/ui/Card';
 import Field, { Input } from '@/components/ui/Field';
 import Pill from '@/components/ui/Pill';
+import ThemeToggle from '@/components/ui/ThemeToggle';
 
 type Shop = Record<string, any>;
 
@@ -56,6 +57,7 @@ export default function SettingsSections() {
   return (
     <Show when={shop()} fallback={<div class="text-sm text-[color:var(--color-muted)]">Loading…</div>}>
       <div class="space-y-6">
+        <AppearanceSection />
         <ShopSection shop={shop()!} saving={savingKey() === 'shop'} onSave={(p) => onSave('shop', p)} />
         <LicenseSection shop={shop()!} saving={savingKey() === 'license'} onSave={(p) => onSave('license', p)} />
         <PricingSection shop={shop()!} saving={savingKey() === 'pricing'} onSave={(p) => onSave('pricing', p)} />
@@ -71,6 +73,27 @@ export default function SettingsSections() {
         </div>
       </Show>
     </Show>
+  );
+}
+
+function AppearanceSection() {
+  return (
+    <Card>
+      <CardHeader>
+        <h3 class="font-serif text-base font-medium flex-1">Appearance</h3>
+      </CardHeader>
+      <CardBody>
+        <div class="flex items-center gap-3">
+          <div class="flex-1">
+            <div class="text-sm font-medium">Theme</div>
+            <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
+              Paper (light, default) or Site (dark). Saved to this browser.
+            </div>
+          </div>
+          <ThemeToggle />
+        </div>
+      </CardBody>
+    </Card>
   );
 }
 

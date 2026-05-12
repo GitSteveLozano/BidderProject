@@ -8,6 +8,49 @@ export const prerender = false;
 Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
 Astro.response.headers.set('cdn-cache-control', 'no-store');
 
+// Permanent SSR-regression probe. /quotes?diag=1 returns runtime
+// detection JSON so we can tell at a glance if Astro's isNode check
+// flips back to true on a future @astrojs/cloudflare upgrade and
+// re-triggers the [object Object] failure mode. Stamps x-ssr-build-tag
+// on every response.
+const SSR_BUILD_TAG = 'brief-v1-streaming-disabled';
+Astro.response.headers.set('x-ssr-build-tag', SSR_BUILD_TAG);
+
+if (Astro.url.searchParams.get('diag') === '1') {
+  const procTag =
+    typeof process !== 'undefined'
+      ? Object.prototype.toString.call(process)
+      : '(undefined)';
+  const isNodeLike =
+    typeof process !== 'undefined' && procTag === '[object process]';
+  return new Response(
+    JSON.stringify(
+      {
+        build_tag: SSR_BUILD_TAG,
+        timestamp: new Date().toISOString(),
+        runtime: {
+          typeof_process: typeof process,
+          process_toString_tag: procTag,
+          astro_isNode_would_be: isNodeLike,
+          has_ReadableStream: typeof ReadableStream !== 'undefined',
+          has_TextEncoder: typeof TextEncoder !== 'undefined',
+          navigator_userAgent: (globalThis as any).navigator?.userAgent ?? null,
+        },
+      },
+      null,
+      2,
+    ),
+    {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'cache-control': 'no-store',
+        'x-ssr-build-tag': SSR_BUILD_TAG,
+      },
+    },
+  );
+}
+
 const env = Astro.locals.runtime?.env;
 const user = Astro.locals.user;
 const membership = Astro.locals.membership;
