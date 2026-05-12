@@ -620,7 +620,11 @@ function VoiceIntake(p: { setScopeText: (v: string) => void }) {
   const [state, setState] = createSignal<'idle' | 'recording' | 'uploading' | 'done'>('idle');
   const [error, setError] = createSignal<string | null>(null);
   const [info, setInfo] = createSignal<{ duration: number | null; chars: number } | null>(null);
+  // `elapsed` is the live counter while recording; `recordedSeconds`
+  // is the captured value at stop-time so the UI can keep showing
+  // it through 'uploading' and 'done' states.
   const [elapsed, setElapsed] = createSignal(0);
+  const [recordedSeconds, setRecordedSeconds] = createSignal<number | null>(null);
   let mediaRecorder: MediaRecorder | null = null;
   let chunks: BlobPart[] = [];
   let timer: number | null = null;
@@ -628,11 +632,15 @@ function VoiceIntake(p: { setScopeText: (v: string) => void }) {
   const start = async () => {
     setError(null);
     setInfo(null);
+    setRecordedSeconds(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       chunks = [];
-      const mime = pickAudioMime();
-      mediaRecorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      // Don't force a mimeType — Workers AI Whisper handles webm/opus
+      // inconsistently. Letting the browser pick its default produces
+      // a more compatible output, and the server-side transcribe path
+      // tolerates whatever lands.
+      mediaRecorder = new MediaRecorder(stream);
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
@@ -652,6 +660,7 @@ function VoiceIntake(p: { setScopeText: (v: string) => void }) {
 
   const stop = () => {
     if (timer != null) { clearInterval(timer); timer = null; }
+    setRecordedSeconds(elapsed());
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop();
       setState('uploading');
@@ -661,23 +670,51 @@ function VoiceIntake(p: { setScopeText: (v: string) => void }) {
   const transcribe = async (blob: Blob) => {
     try {
       const fd = new FormData();
-      fd.append('file', blob, blob.type.includes('mp4') ? 'recording.m4a' : 'recording.webm');
+      const filename = blob.type.includes('mp4')
+        ? 'recording.m4a'
+        : blob.type.includes('webm')
+          ? 'recording.webm'
+          : blob.type.includes('ogg')
+            ? 'recording.ogg'
+            : 'recording.wav';
+      fd.append('file', blob, filename);
       const resp = await fetch('/api/intake/transcribe', { method: 'POST', body: fd });
-      if (!resp.ok) throw new Error(await resp.text());
-      const data = await resp.json() as { text: string; duration_seconds: number | null; empty_text: boolean };
-      if (data.empty_text) {
-        setError('Brief got the recording but no speech came through. Try recording again somewhere quieter.');
+      const data = await resp.json().catch(() => null) as
+        | {
+            text?: string;
+            duration_seconds?: number | null;
+            empty_text?: boolean;
+            error?: string;
+            file_type?: string;
+            tried?: Array<{ model: string; ok: boolean; chars: number; error?: string }>;
+          }
+        | null;
+      if (!resp.ok) {
+        throw new Error(data?.error || `Server returned ${resp.status}`);
+      }
+      if (!data || data.empty_text || !data.text?.trim()) {
+        const triedSummary = (data?.tried ?? [])
+          .map((t) => `${t.model.split('/').pop()}: ${t.ok ? `${t.chars} chars` : t.error}`)
+          .join(' · ');
+        setError(
+          `Captured ${recordedSeconds() ?? '?'}s of audio (${data?.file_type || 'unknown format'}) but ` +
+          `Whisper returned an empty transcript. ${triedSummary ? `Tried — ${triedSummary}.` : ''} ` +
+          `Try again, or paste the scope directly while we sort the codec out.`,
+        );
         setState('idle');
         return;
       }
       p.setScopeText(data.text);
-      setInfo({ duration: data.duration_seconds, chars: data.text.length });
+      setInfo({ duration: data.duration_seconds ?? null, chars: data.text.length });
       setState('done');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setState('idle');
     }
   };
+
+  const timerLabel = (secs: number) =>
+    `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 
   return (
     <div>
@@ -717,18 +754,27 @@ function VoiceIntake(p: { setScopeText: (v: string) => void }) {
           </Show>
         </button>
         <div class="flex-1 min-w-0">
-          <div class="text-sm font-medium">
-            {state() === 'idle' && 'Tap to start recording'}
-            {state() === 'recording' && 'Recording…'}
-            {state() === 'uploading' && 'Transcribing with Workers AI…'}
-            {state() === 'done' && info() && `Transcribed ${info()!.chars.toLocaleString()} chars${info()!.duration ? ` (${Math.round(info()!.duration!)}s)` : ''}`}
+          <div class="text-sm font-medium flex items-baseline gap-2">
+            <span>
+              {state() === 'idle' && 'Tap to start recording'}
+              {state() === 'recording' && 'Recording…'}
+              {state() === 'uploading' && 'Transcribing with Workers AI…'}
+              {state() === 'done' && info() && `Transcribed ${info()!.chars.toLocaleString()} chars`}
+            </span>
+            <Show when={state() === 'recording' || (recordedSeconds() != null && state() !== 'idle')}>
+              <span class="font-mono text-xs text-[color:var(--color-muted)] tabular-nums">
+                {timerLabel(state() === 'recording' ? elapsed() : recordedSeconds() ?? 0)}
+              </span>
+            </Show>
           </div>
           <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
             {state() === 'recording'
-              ? `${Math.floor(elapsed() / 60)}:${String(elapsed() % 60).padStart(2, '0')} elapsed — tap to stop`
-              : state() === 'done'
-                ? 'Transcript appears below; edit anything you want to keep.'
-                : 'Up to 25 minutes. Talk through the walk-through; Brief structures it.'}
+              ? 'Tap to stop'
+              : state() === 'uploading'
+                ? 'Whisper running on your audio. A few seconds.'
+                : state() === 'done'
+                  ? 'Transcript appears below; edit anything you want to keep.'
+                  : 'Up to 25 minutes. Talk through the walk-through; Brief structures it.'}
           </div>
         </div>
         <Show when={state() === 'done'}>
@@ -748,19 +794,6 @@ function VoiceIntake(p: { setScopeText: (v: string) => void }) {
   );
 }
 
-function pickAudioMime(): string | null {
-  const candidates = [
-    'audio/webm;codecs=opus',
-    'audio/webm',
-    'audio/mp4',
-    'audio/ogg;codecs=opus',
-  ];
-  if (typeof MediaRecorder === 'undefined') return null;
-  for (const m of candidates) {
-    if (MediaRecorder.isTypeSupported(m)) return m;
-  }
-  return null;
-}
 
 function ScopeStep(p: {
   scanning: () => boolean;

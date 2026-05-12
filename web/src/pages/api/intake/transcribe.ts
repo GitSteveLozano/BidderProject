@@ -8,13 +8,25 @@
  *
  * Uses the AI binding (`env.AI.run`) — no API key needed; the binding
  * has to be enabled on the Pages project ("AI" in the bindings list).
+ *
+ * Whisper-large-v3-turbo returns empty strings on some webm/opus
+ * inputs (the format MediaRecorder defaults to in Chrome/Firefox).
+ * If the primary model returns no text, we retry once with the older
+ * whisper model, which is more permissive on container formats.
  */
 import type { APIRoute } from 'astro';
 
 export const prerender = false;
 
-const MAX_BYTES = 25 * 1024 * 1024; // 25 MB — covers ~25 min of mp3 at 128 kbps
-const MODEL = '@cf/openai/whisper-large-v3-turbo';
+const MAX_BYTES = 25 * 1024 * 1024; // 25 MB
+const PRIMARY_MODEL = '@cf/openai/whisper-large-v3-turbo';
+const FALLBACK_MODEL = '@cf/openai/whisper';
+
+interface WhisperResult {
+  text?: string;
+  transcription_info?: { duration?: number };
+  word_count?: number;
+}
 
 export const POST: APIRoute = async ({ request, locals }) => {
   if (!locals.user) return json({ error: 'Not authenticated' }, 401);
@@ -34,30 +46,62 @@ export const POST: APIRoute = async ({ request, locals }) => {
   if (file.size > MAX_BYTES) {
     return json({ error: `Audio too large (max ${MAX_BYTES / 1024 / 1024} MB)` }, 413);
   }
+  if (file.size < 1024) {
+    return json({ error: 'Audio file too small — recording may have failed before any data was captured' }, 400);
+  }
 
   const buf = new Uint8Array(await file.arrayBuffer());
+  const audio = Array.from(buf);
 
+  const tried: Array<{ model: string; ok: boolean; chars: number; error?: string }> = [];
+
+  let primary: WhisperResult | null = null;
   try {
-    // Workers AI Whisper accepts the audio as an array of bytes.
-    const result = (await env.AI.run(MODEL, {
-      audio: Array.from(buf),
-    })) as { text?: string; transcription_info?: { duration?: number } };
-
-    return json(
-      {
-        text: (result.text ?? '').trim(),
-        duration_seconds: result.transcription_info?.duration ?? null,
-        filename: file.name,
-        empty_text: !result.text || result.text.trim().length === 0,
-      },
-      200,
-    );
+    primary = (await env.AI.run(PRIMARY_MODEL, { audio })) as WhisperResult;
+    tried.push({ model: PRIMARY_MODEL, ok: true, chars: (primary.text ?? '').length });
   } catch (err) {
-    return json(
-      { error: `Transcription failed: ${err instanceof Error ? err.message : String(err)}` },
-      500,
-    );
+    tried.push({
+      model: PRIMARY_MODEL,
+      ok: false,
+      chars: 0,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
+
+  let chosen: WhisperResult | null = primary;
+  if (!primary?.text?.trim()) {
+    // Primary returned empty — most often a format issue with
+    // webm/opus. Retry with the older whisper model.
+    try {
+      chosen = (await env.AI.run(FALLBACK_MODEL, { audio })) as WhisperResult;
+      tried.push({
+        model: FALLBACK_MODEL,
+        ok: true,
+        chars: (chosen.text ?? '').length,
+      });
+    } catch (err) {
+      tried.push({
+        model: FALLBACK_MODEL,
+        ok: false,
+        chars: 0,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const text = (chosen?.text ?? '').trim();
+  return json(
+    {
+      text,
+      duration_seconds: chosen?.transcription_info?.duration ?? null,
+      filename: file.name,
+      file_size: file.size,
+      file_type: file.type,
+      empty_text: text.length === 0,
+      tried,
+    },
+    200,
+  );
 };
 
 function json(payload: unknown, status: number): Response {
