@@ -37,6 +37,10 @@ export interface CloudflareEnv {
   // automated parser (Brevo, CF Email Routing) POSTs to
   // /api/inbound/email it passes this in `x-brief-webhook-secret`.
   INBOUND_WEBHOOK_SECRET?: string;
+  // Shared secret for the scheduled-send cron worker. The external
+  // cron (cron-job.org or CF Cron Triggers) hits /api/cron/* with
+  // this in `x-brief-cron-secret`.
+  CRON_SECRET?: string;
 }
 
 export function client(

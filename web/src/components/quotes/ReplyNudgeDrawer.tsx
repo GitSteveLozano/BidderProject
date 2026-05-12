@@ -38,6 +38,15 @@ export default function ReplyNudgeDrawer(props: Props) {
   const [error, setError] = createSignal<string | null>(null);
   const [sending, setSending] = createSignal(false);
   const [channel, setChannel] = createSignal<'email' | 'sms'>('email');
+  const [sendMode, setSendMode] = createSignal<'now' | 'later'>('now');
+  // Default to next weekday 9:10 AM, mirroring the Best-time-to-send
+  // heuristic — same time UX wherever scheduling shows up.
+  const defaultScheduleLocal = () => {
+    const t = nextWeekdayMorning(new Date());
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`;
+  };
+  const [scheduleAt, setScheduleAt] = createSignal(defaultScheduleLocal());
   let abortController: AbortController | null = null;
   let userTouched = false;
 
@@ -119,6 +128,8 @@ export default function ReplyNudgeDrawer(props: Props) {
     setSending(true);
     setError(null);
     try {
+      const scheduledFor =
+        sendMode() === 'later' ? new Date(scheduleAt()).toISOString() : null;
       const resp = await fetch('/api/quote/message', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -128,6 +139,7 @@ export default function ReplyNudgeDrawer(props: Props) {
           subject: subject(),
           body: body(),
           drafted_by: userTouched ? 'user' : 'brief',
+          scheduled_for: scheduledFor,
         }),
       });
       if (!resp.ok) throw new Error(await resp.text());
@@ -161,7 +173,9 @@ export default function ReplyNudgeDrawer(props: Props) {
             disabled={sending() || streaming() || !body().trim()}
             onClick={send}
           >
-            {sending() ? 'Sending…' : 'Send'}
+            {sending()
+              ? sendMode() === 'later' ? 'Scheduling…' : 'Sending…'
+              : sendMode() === 'later' ? 'Schedule' : 'Send now'}
           </Button>
         </>
       }
@@ -203,6 +217,15 @@ export default function ReplyNudgeDrawer(props: Props) {
           aria-label="Message body"
         />
       </div>
+
+      <Show when={!streaming() && body().trim().length > 0}>
+        <SendTimePicker
+          sendMode={sendMode}
+          setSendMode={setSendMode}
+          scheduleAt={scheduleAt}
+          setScheduleAt={setScheduleAt}
+        />
+      </Show>
 
       {/* "Why this draft" — both Reply + Nudge, per the email-draft
           mockups in design/mockups/03-pricing.png (Nudge) and the user
@@ -329,6 +352,59 @@ function nextWeekdayMorning(from: Date): Date {
   if (x <= from) x.setDate(x.getDate() + 1);
   while (x.getDay() === 0 || x.getDay() === 6) x.setDate(x.getDate() + 1);
   return x;
+}
+
+/** Send-time picker — "Now" vs "Schedule for". When the operator
+ * picks Schedule, scheduled_for goes through to /api/quote/message
+ * which records the row as draft=true; the cron worker
+ * /api/cron/process-scheduled fans it out at the chosen time. */
+export function SendTimePicker(p: {
+  sendMode: () => 'now' | 'later';
+  setSendMode: (m: 'now' | 'later') => void;
+  scheduleAt: () => string;
+  setScheduleAt: (s: string) => void;
+}) {
+  return (
+    <div class="mt-4">
+      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-1.5">
+        Send time
+      </div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <div
+          role="tablist"
+          class="inline-flex rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] p-0.5"
+        >
+          {(['now', 'later'] as const).map((m) => {
+            const active = () => p.sendMode() === m;
+            return (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={active()}
+                onClick={() => p.setSendMode(m)}
+                class={[
+                  'px-3 py-1.5 text-xs font-medium uppercase tracking-[0.04em] font-mono rounded-md transition-colors',
+                  active()
+                    ? 'bg-[color:var(--color-surface)] text-[color:var(--color-ink)] shadow-sm'
+                    : 'text-[color:var(--color-muted)] hover:text-[color:var(--color-ink-2)]',
+                ].join(' ')}
+              >
+                {m === 'now' ? 'Now' : 'Schedule'}
+              </button>
+            );
+          })}
+        </div>
+        <Show when={p.sendMode() === 'later'}>
+          <input
+            type="datetime-local"
+            class="text-sm font-mono px-2 py-1.5 rounded-lg bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] focus:outline-none focus:border-[color:var(--color-accent)]"
+            value={p.scheduleAt()}
+            onInput={(e) => p.setScheduleAt(e.currentTarget.value)}
+          />
+        </Show>
+      </div>
+    </div>
+  );
 }
 
 /** Email / SMS segmented control. SMS branch hides the subject field
