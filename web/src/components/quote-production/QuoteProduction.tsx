@@ -330,19 +330,152 @@ function IntakeStep(p: {
   canContinue: () => boolean;
   onContinue: () => void;
 }) {
+  // Method picker per design/mockups/06-sent.png. Only "type" ships
+  // today; the others surface as "Coming soon" so the operator sees
+  // the menu Brief is heading toward.
+  type Method = 'type' | 'pdf' | 'voice' | 'visit';
+  const [method, setMethod] = createSignal<Method | null>(null);
+
   return (
     <div>
-      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-        Step 1 · Intake
-      </div>
-      <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">
+      <h1 class="font-serif text-[36px] sm:text-[40px] font-medium leading-tight tracking-tight">
         How did the scope come in?
       </h1>
-      <p class="mt-2 text-sm text-[color:var(--color-muted)] max-w-2xl leading-relaxed">
-        Paste an RFP, an email from a client, or notes from a walk-through. Brief reads it and builds the line items.
+      <p class="mt-3 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
+        Drop a PDF, paste the client's email, or just describe the job out loud. Brief reads it and builds the line items.
       </p>
 
-      <div class="mt-6 grid grid-cols-2 gap-4">
+      <Show
+        when={method() === null}
+        fallback={
+          <MethodForm
+            method={method()!}
+            onBackToPicker={() => setMethod(null)}
+            clientName={p.clientName} setClientName={p.setClientName}
+            clientContact={p.clientContact} setClientContact={p.setClientContact}
+            projectTitle={p.projectTitle} setProjectTitle={p.setProjectTitle}
+            projectAddress={p.projectAddress} setProjectAddress={p.setProjectAddress}
+            scopeText={p.scopeText} setScopeText={p.setScopeText}
+            canContinue={p.canContinue}
+            onContinue={p.onContinue}
+          />
+        }
+      >
+        <div class="mt-7 grid grid-cols-1 sm:grid-cols-[1.2fr_1fr] gap-3 sm:gap-4">
+          <MethodCard
+            tone="accent"
+            title="Drop a PDF or doc"
+            sub="Client RFP, blueprints, contractor email"
+            icon={<svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M7 4h7l4 4v9.5a1.5 1.5 0 0 1 -1.5 1.5h-9.5a1.5 1.5 0 0 1 -1.5 -1.5v-12a1.5 1.5 0 0 1 1.5 -1.5z" /><path d="M14 4v4h4" /><path d="M11 18v-4M9 16l2 -2 2 2" stroke-linecap="round" /></svg>}
+            disabled
+            disabledNote="Coming soon — text paste works today"
+          />
+          <div class="grid grid-cols-1 gap-3">
+            <MethodCard
+              tone="default"
+              compact
+              title="Paste or type the scope"
+              sub="Best for emails &amp; text messages"
+              icon={<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="16" height="11" rx="1.5" /><path d="M5 8h2M9 8h2M13 8h2M5 11h6M5 14h10" stroke-linecap="round" /></svg>}
+              onClick={() => setMethod('type')}
+            />
+            <MethodCard
+              tone="default"
+              compact
+              title="Talk through the walk-through"
+              sub="Record from your truck on the way back"
+              icon={<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="6" height="9" rx="3" /><path d="M4 10a6 6 0 0 0 12 0M10 16v2" stroke-linecap="round" /></svg>}
+              disabled
+              disabledNote="Coming soon"
+            />
+          </div>
+        </div>
+
+        <div class="mt-5 rounded-xl border border-dashed border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] px-5 py-4 flex items-center gap-3">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" class="text-[color:var(--color-muted)] shrink-0" aria-hidden="true"><circle cx="9" cy="9" r="7" /><path d="M9 6v3.5M9 12.2v.3" stroke-linecap="round" /></svg>
+          <div class="flex-1 text-[13.5px] leading-relaxed">
+            <span class="font-medium">Brief is calibrating.</span>{' '}
+            <span class="text-[color:var(--color-muted)]">It already knows your shop's voice — line items will sharpen as you close more jobs.</span>
+          </div>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+function MethodCard(p: {
+  title: string;
+  sub: string;
+  icon: any;
+  tone?: 'accent' | 'default';
+  compact?: boolean;
+  disabled?: boolean;
+  disabledNote?: string;
+  onClick?: () => void;
+}) {
+  const inner = (
+    <>
+      <div class="flex items-start gap-3">
+        <div
+          class={[
+            'w-10 h-10 rounded-lg grid place-items-center shrink-0',
+            p.tone === 'accent'
+              ? 'bg-[color:var(--color-accent-tint)] text-[color:var(--color-accent)]'
+              : 'bg-[color:var(--color-bg-2)] text-[color:var(--color-muted)]',
+          ].join(' ')}
+          aria-hidden="true"
+        >
+          {p.icon}
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class={p.compact ? 'font-serif font-medium text-[16px] leading-tight' : 'font-serif font-medium text-[18px] leading-tight'}>
+            {p.title}
+          </div>
+          <div class="text-[12.5px] text-[color:var(--color-muted)] mt-1">{p.sub}</div>
+          {p.disabled && p.disabledNote && (
+            <div class="text-[11px] mt-2 font-mono uppercase tracking-wide text-[color:var(--color-muted-2)]">
+              {p.disabledNote}
+            </div>
+          )}
+        </div>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class={p.disabled ? 'text-[color:var(--color-muted-2)]' : 'text-[color:var(--color-muted)]'} aria-hidden="true"><path d="M5 3l4 4-4 4" /></svg>
+      </div>
+    </>
+  );
+  const baseClass =
+    'block w-full text-left rounded-xl border bg-[color:var(--color-surface)] p-5 transition-all ' +
+    (p.disabled
+      ? 'border-[color:var(--color-line)] opacity-70 cursor-not-allowed'
+      : 'border-[color:var(--color-line)] hover:border-[color:var(--color-line-strong)] hover:shadow-[var(--shadow-md)] hover:-translate-y-px cursor-pointer');
+  return (
+    <button type="button" class={baseClass} disabled={p.disabled} onClick={p.onClick}>
+      {inner}
+    </button>
+  );
+}
+
+function MethodForm(p: {
+  method: 'type' | 'pdf' | 'voice' | 'visit';
+  onBackToPicker: () => void;
+  clientName: () => string; setClientName: (v: string) => void;
+  clientContact: () => string; setClientContact: (v: string) => void;
+  projectTitle: () => string; setProjectTitle: (v: string) => void;
+  projectAddress: () => string; setProjectAddress: (v: string) => void;
+  scopeText: () => string; setScopeText: (v: string) => void;
+  canContinue: () => boolean;
+  onContinue: () => void;
+}) {
+  return (
+    <div class="mt-7">
+      <button
+        type="button"
+        class="text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)] inline-flex items-center gap-1.5 mb-4"
+        onClick={p.onBackToPicker}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 2.5L3.5 6l4 3.5" /></svg>
+        Change method
+      </button>
+      <div class="grid grid-cols-2 gap-4">
         <Field label="Client name">
           <Input value={p.clientName()} onInput={(e) => p.setClientName(e.currentTarget.value)} />
         </Field>
@@ -356,7 +489,6 @@ function IntakeStep(p: {
           <Input value={p.projectAddress()} onInput={(e) => p.setProjectAddress(e.currentTarget.value)} />
         </Field>
       </div>
-
       <div class="mt-4">
         <Field label="Scope text" helper="RFP, email body, walk-through notes — paste anything that describes the work">
           <textarea
@@ -368,7 +500,6 @@ function IntakeStep(p: {
           />
         </Field>
       </div>
-
       <div class="mt-6 flex justify-end">
         <Button variant="accent" onClick={p.onContinue} disabled={!p.canContinue()}>
           Scan this scope →
