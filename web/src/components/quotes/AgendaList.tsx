@@ -89,7 +89,7 @@ export default function AgendaList(props: Props) {
           <Show when={buckets().today.length > 0}>
             <Group
               title="Today"
-              subtitle="On the table right now."
+              subtitle="Reply or nudge — these are blocking on you"
               quotes={buckets().today}
               onAction={openDrawer}
             />
@@ -98,7 +98,7 @@ export default function AgendaList(props: Props) {
           <Show when={buckets().thisWeek.length > 0}>
             <Group
               title="This week"
-              subtitle="Recently sent — no movement yet."
+              subtitle="Check in if no movement by Friday"
               quotes={buckets().thisWeek}
               onAction={openDrawer}
             />
@@ -116,7 +116,7 @@ export default function AgendaList(props: Props) {
           <Show when={buckets().later.length > 0}>
             <Group
               title="Later"
-              subtitle="Sent within the last two weeks."
+              subtitle="Sent recently — give it a beat before chasing"
               quotes={buckets().later}
               onAction={openDrawer}
             />
@@ -381,23 +381,32 @@ function TableView(p: { quotes: AgendaQuote[] }) {
 }
 
 function ColdStartEmpty() {
+  // Per design/mockups/04-integrations.png — full editorial empty card,
+  // not a centered tiny block. The mockup treats the empty state as a
+  // primary screen.
   return (
-    <div class="mx-auto max-w-[480px] text-center py-12 px-6">
-      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
-        Cold start
+    <article class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 sm:p-14 mt-6 max-w-[760px] mx-auto">
+      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-3">
+        Pipeline · Empty
       </div>
-      <h2 class="font-serif text-[24px] font-medium leading-tight">No quotes yet.</h2>
-      <p class="mt-3 text-sm text-[color:var(--color-muted)] leading-relaxed">
-        The fastest way to start is to upload one you sent recently. Brief reads it, learns your voice, and gets ready for the next one.
+      <h2 class="font-serif text-[32px] sm:text-[40px] font-medium leading-tight">
+        Nothing in flight.
+      </h2>
+      <p class="mt-4 text-[15px] text-[color:var(--color-ink-2)] leading-relaxed font-serif max-w-[55ch]">
+        Your pipeline is the heartbeat of the practice. Open quotes live here — sent, awaiting, in conversation. Won and lost slide into history. Make a first one and watch it move.
       </p>
-      <div class="mt-6 flex items-center justify-center gap-2">
+      <div class="mt-7 flex items-center gap-4">
         <a
           href="/generate"
-          class="inline-flex items-center px-4 py-2 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-sm font-medium hover:brightness-95"
+          class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-sm font-medium hover:brightness-95"
         >
-          Produce your first quote →
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9" /></svg>
+          New quote
         </a>
+        <span class="text-xs font-mono text-[color:var(--color-muted)]">
+          ~10 minutes start to send
+        </span>
       </div>
-    </div>
+    </article>
   );
 }
