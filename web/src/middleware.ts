@@ -28,7 +28,12 @@ const PUBLIC_PATHS = new Set<string>([
   '/404',
 ]);
 
-const PUBLIC_PREFIXES = ['/_astro/', '/_image'];
+// Anything under /api/auth/ is part of the auth handshake (e.g.
+// /api/auth/exchange — POSTed from /auth/callback before a session
+// cookie exists). Must bypass the auth gate or the redirect to
+// /auth/signin turns the JSON contract into HTML and the client-side
+// parser explodes.
+const PUBLIC_PREFIXES = ['/_astro/', '/_image', '/api/auth/'];
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const url = new URL(context.request.url);
