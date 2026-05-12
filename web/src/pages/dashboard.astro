@@ -42,8 +42,34 @@ const decided = qs.filter((q) => q.state === 'WON' || q.state === 'LOST');
 const won = qs.filter((q) => q.state === 'WON');
 const pipelineValue = active.reduce((s, q) => s + Number(q.total ?? 0), 0);
 const winRatePct = decided.length >= 3 ? Math.round((won.length / decided.length) * 100) : null;
-const avgQuote =
-  qs.length > 0 ? qs.reduce((s, q) => s + Number(q.total ?? 0), 0) / qs.length : 0;
+
+// Avg time from sent → won, in days. Per design/mockups/02-cost-recon.png
+// KPI #3 reads "AVG QUOTE → SIGN  4.3d  -1.1d  down from 5.4d". This
+// measures the cycle time, not a dollar value.
+function daysBetween(a: string | null, b: string | null): number | null {
+  if (!a || !b) return null;
+  const ms = new Date(b).getTime() - new Date(a).getTime();
+  if (ms < 0) return null;
+  return ms / (24 * 60 * 60 * 1000);
+}
+const signTimes: number[] = won
+  .map((q: any) => daysBetween(q.sent_at, q.responded_at) ?? daysBetween(q.sent_at, q.updated_at))
+  .filter((d: number | null): d is number => d !== null && d >= 0);
+const avgDaysToSign: number | null =
+  signTimes.length > 0 ? signTimes.reduce((s, d) => s + d, 0) / signTimes.length : null;
+
+// Margin context: which closed job ran over the most recently? Surfaces
+// as a single-line annotation under the Margin-on-closed KPI per mockup.
+// Use the most recent WON quote whose margin_pct is below the shop's
+// target (default 32%) — closest analogue we have without a separate
+// "this job ran over" event.
+const targetMargin = 32; // could read from shops.default_markup_pct
+const recentOverrun = won
+  .filter((q: any) => q.margin_pct != null && Number(q.margin_pct) < targetMargin)
+  .sort((a: any, b: any) => +new Date(b.responded_at ?? b.created_at) - +new Date(a.responded_at ?? a.created_at))[0];
+const marginContextLine = recentOverrun
+  ? `${(recentOverrun.client_name as string).split(/[\s,]+/)[0]} ran light at ${Number(recentOverrun.margin_pct).toFixed(0)}%`
+  : null;
 
 // Pipeline funnel data
 const funnel: Array<{ label: string; count: number; value: number }> = [
@@ -197,10 +223,12 @@ const eventLabels: Record<string, string> = {
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
           <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] leading-tight">Avg quote<br/>→ sign</div>
           <div class="mt-2 font-serif text-kpi font-medium tabular-nums">
-            {qs.length === 0 ? '—' : fmtCurrencyCompact(avgQuote)}
+            {avgDaysToSign != null ? `${avgDaysToSign.toFixed(1)}d` : '—'}
           </div>
           <div class="mt-1 text-xs text-[color:var(--color-muted)]">
-            {qs.length === 0 ? 'needs ≥10 sent' : `across ${qs.length} quote${qs.length === 1 ? '' : 's'}`}
+            {avgDaysToSign == null
+              ? `needs ≥${Math.max(1, 3 - won.length)} more signed`
+              : `from ${signTimes.length} signed quote${signTimes.length === 1 ? '' : 's'}`}
           </div>
         </div>
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
@@ -209,7 +237,9 @@ const eventLabels: Record<string, string> = {
             {marginOnClosed != null ? `${marginOnClosed.toFixed(1)}%` : '—'}
           </div>
           <div class="mt-1 text-xs text-[color:var(--color-muted)]">
-            {marginOnClosed == null ? 'needs closed jobs' : `from ${closedWithMargin.length} closed`}
+            {marginOnClosed == null
+              ? 'needs closed jobs'
+              : marginContextLine ?? `from ${closedWithMargin.length} closed`}
           </div>
         </div>
       </div>
