@@ -1,0 +1,53 @@
+---
+import Brief from '@/layouts/Brief.astro';
+import AgendaList from '@/components/quotes/AgendaList';
+import { client as supabaseService } from '@/lib/supabase';
+import { computeAge, type AgendaQuote } from '@/lib/quote-helpers';
+
+export const prerender = false;
+Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
+Astro.response.headers.set('cdn-cache-control', 'no-store');
+
+const env = Astro.locals.runtime?.env;
+const user = Astro.locals.user;
+const membership = Astro.locals.membership;
+if (!user || !membership || !env) {
+  return Astro.redirect('/auth/signin?next=/quotes');
+}
+
+const svc = supabaseService(env, 'service');
+const { data: shop } = await svc
+  .from('shops')
+  .select('legal_name, trade_name, owner_name, data_state')
+  .eq('id', membership.shop_id)
+  .maybeSingle();
+
+const { data: rows } = await svc
+  .from('quotes')
+  .select('id, ref, client_name, project_title, state, total, next_step, sent_at, responded_at, created_at')
+  .eq('shop_id', membership.shop_id)
+  .order('created_at', { ascending: false });
+
+const quotes: AgendaQuote[] = (rows ?? []).map((r) => ({
+  ...r,
+  total: Number(r.total ?? 0),
+  age_days: computeAge(r),
+}));
+
+const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
+const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
+const activeQuotes = quotes.filter((q) => ['DRAFT', 'SENT', 'AWAITING', 'RESPONDED'].includes(q.state)).length;
+---
+
+<Brief
+  title="Quotes"
+  active="quotes"
+  shopLabel={shopLabel}
+  shopInitial={shopLabel.charAt(0).toUpperCase()}
+  ownerFirst={ownerFirst}
+  ownerRole={membership.role.charAt(0).toUpperCase() + membership.role.slice(1)}
+  dataState={shop?.data_state ?? 'cold-start'}
+  activeQuotes={activeQuotes}
+>
+  <AgendaList client:load quotes={quotes} />
+</Brief>
