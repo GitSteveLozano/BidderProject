@@ -163,7 +163,12 @@ function DetailPanel(p: { client: ClientRow; shopAvg: number | null; onClose: ()
           {avatarFor(p.client.name)}
         </div>
         <div class="min-w-0 flex-1">
-          <div class="font-serif text-[17px] font-medium leading-tight">{p.client.name}</div>
+          <a
+            href={`/clients/${p.client.id}`}
+            class="font-serif text-[17px] font-medium leading-tight hover:underline"
+          >
+            {p.client.name}
+          </a>
           <Show when={p.client.primary_contact_name}>
             <div class="text-[12.5px] text-[color:var(--color-muted)] mt-0.5">
               {p.client.primary_contact_name}
