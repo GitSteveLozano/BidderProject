@@ -150,65 +150,136 @@ function Detail(p: {
     if (v > 5) return 'text-[color:var(--color-warn)]';
     return 'text-[color:var(--color-ink)]';
   };
+  // Percent complete — derived since the schema doesn't carry it.
+  //   CLOSED        → 100%
+  //   INPROGRESS    → time-based ratio against the scheduled window,
+  //                   clamped to 1..99% so the ring shows the job is
+  //                   in motion even when actuals haven't synced yet
+  //   SCHEDULED     →   0%
+  const pctComplete = createMemo(() => {
+    if (p.job.state === 'CLOSED') return 100;
+    if (p.job.state === 'SCHEDULED') return 0;
+    const start = p.job.actual_start ?? p.job.scheduled_start;
+    const end = p.job.scheduled_end;
+    if (!start || !end) return 50;
+    const t0 = new Date(start).getTime();
+    const t1 = new Date(end).getTime();
+    if (t1 <= t0) return 50;
+    const now = Date.now();
+    return Math.max(1, Math.min(99, Math.round(((now - t0) / (t1 - t0)) * 100)));
+  });
+  // Projected margin = (quoted - projected_actual_total) / quoted * 100,
+  // where projected_actual_total scales current actuals to 100% complete.
+  const projectedMargin = createMemo(() => {
+    if (p.job.estimated_total <= 0) return null;
+    const pct = pctComplete();
+    if (pct === 0) return null;
+    const projectedTotal = totalActual() / (pct / 100);
+    return ((p.job.estimated_total - projectedTotal) / p.job.estimated_total) * 100;
+  });
+
+  const ranOver = () => (variancePct() ?? 0) > 5;
 
   return (
     <div>
-      <div class="flex items-center gap-3">
-        <span class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">{p.job.ref}</span>
-        <StatusPill state={p.job.state} />
-        <Show when={!p.job.payroll_synced_at && p.job.state !== 'CLOSED'}>
-          <Pill tone="warn" dot={false}>Payroll not synced</Pill>
-        </Show>
+      {/* Top row: project title + crew/dates on left, status-and-warn pills, progress ring on right */}
+      <div class="grid grid-cols-[1fr_auto] gap-6 items-start">
+        <div>
+          <div class="flex items-center gap-2 mb-1.5">
+            <span class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">{p.job.ref}</span>
+            <StatusPill state={p.job.state} size="sm" />
+            <Show when={!p.job.payroll_synced_at && p.job.state !== 'CLOSED'}>
+              <Pill tone="warn" dot={false} size="sm">Payroll not synced</Pill>
+            </Show>
+            <Show when={ranOver()}>
+              <Pill tone="warn" dot={false} size="sm">Running over</Pill>
+            </Show>
+          </div>
+          <h2 class="font-serif text-[28px] font-medium leading-tight tracking-tight">
+            {p.job.project_title}
+          </h2>
+          <p class="text-[14px] font-serif italic text-[color:var(--color-muted)] mt-1">
+            {p.job.client_name}
+          </p>
+          <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-[color:var(--color-muted)]">
+            <Show when={p.job.scheduled_start || p.job.actual_start}>
+              <span class="inline-flex items-center gap-1.5">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="2.5" width="9" height="8" rx="1" /><path d="M1.5 5h9M4 1.5v2M8 1.5v2" /></svg>
+                {fmtDate(p.job.actual_start ?? p.job.scheduled_start)}
+                {p.job.scheduled_end && ` → ${fmtDate(p.job.scheduled_end)}`}
+              </span>
+            </Show>
+          </div>
+        </div>
+        <ProgressRing percent={pctComplete()} state={p.job.state} />
       </div>
-      <h2 class="mt-2 font-serif text-[24px] font-medium leading-tight">
-        {p.job.project_title}
-      </h2>
-      <p class="text-sm text-[color:var(--color-muted)] mt-1">
-        {p.job.client_name}
-        {p.job.scheduled_start && ` · ${new Date(p.job.scheduled_start).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
-        {p.job.scheduled_end && ` → ${new Date(p.job.scheduled_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
-      </p>
 
-      <div class="mt-6 grid grid-cols-3 gap-3">
-        <Tile label="Estimated" value={fmtCurrencyFull(p.job.estimated_total)} />
-        <Tile label="Actual" value={fmtCurrencyFull(totalActual())} />
+      {/* KPI tiles — Quoted, Actual, Projected margin (mockup 02-cost-recon.png) */}
+      <div class="mt-7 grid grid-cols-3 gap-3">
+        <Tile label="Quoted" value={fmtCurrencyFull(p.job.estimated_total)} />
         <Tile
-          label="Variance"
-          value={`${variance() >= 0 ? '+' : '−'}${fmtCurrencyFull(Math.abs(variance()))}`}
-          sub={variancePct() !== null ? `${variancePct()! >= 0 ? '+' : ''}${variancePct()!.toFixed(1)}%` : '—'}
+          label={p.job.state === 'CLOSED' ? 'Actual' : 'Actuals so far'}
+          value={fmtCurrencyFull(totalActual())}
+          sub={variancePct() !== null ? `${variancePct()! >= 0 ? '+' : '−'}${Math.abs(variancePct()!).toFixed(1)}% vs quoted` : undefined}
           valueClass={varColor()}
+        />
+        <Tile
+          label={p.job.state === 'CLOSED' ? 'Delivered margin' : 'Projected margin'}
+          value={
+            projectedMargin() != null
+              ? `${projectedMargin()! >= 0 ? '' : '−'}${Math.abs(projectedMargin()!).toFixed(1)}%`
+              : '—'
+          }
+          sub={p.job.state === 'CLOSED' ? 'Closed' : `at ${pctComplete()}% complete`}
+          valueClass={projectedMargin() != null && projectedMargin()! < 15 ? 'text-[color:var(--color-warn)]' : ''}
         />
       </div>
 
-      <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
+      {/* Reconciliation table */}
+      <div class="mt-7 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
+        <div class="px-5 py-3.5 border-b border-[color:var(--color-line)] flex items-center gap-2.5">
+          <h3 class="font-serif text-base font-medium flex-1">
+            Where we landed vs. where we bid
+          </h3>
+          <span class="text-[11px] font-mono uppercase tracking-wide text-[color:var(--color-muted-2)]">
+            Auto-synced from payroll & receipts
+          </span>
+        </div>
         <table class="w-full">
           <thead class="bg-[color:var(--color-surface-2)]">
             <tr>
-              <th class="px-3.5 py-2.5 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Description</th>
-              <th class="px-3.5 py-2.5 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Source</th>
-              <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Estimated</th>
-              <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Actual</th>
-              <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Variance</th>
+              <th class="px-4 py-2.5 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Line</th>
+              <th class="px-4 py-2.5 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Source</th>
+              <th class="px-4 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Quoted</th>
+              <th class="px-4 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Actual</th>
+              <th class="px-4 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Variance</th>
             </tr>
           </thead>
           <tbody>
+            <Show when={p.costLines().length === 0}>
+              <tr>
+                <td colspan={5} class="px-4 py-6 text-center text-sm italic font-serif text-[color:var(--color-muted)]">
+                  No cost lines on this job yet.
+                </td>
+              </tr>
+            </Show>
             <For each={p.costLines()}>
               {(line) => {
                 const lv = (line.actual ?? 0) - line.estimated;
                 const lvPct = line.estimated > 0 ? (lv / line.estimated) * 100 : null;
                 return (
                   <tr class="border-t border-[color:var(--color-line)]">
-                    <td class="px-3.5 py-3 text-sm">
-                      <div>{line.description}</div>
+                    <td class="px-4 py-3 text-sm">
+                      <div class="font-medium">{line.description}</div>
                       <div class="text-xs text-[color:var(--color-muted)] mt-0.5 capitalize">{line.category}</div>
                     </td>
-                    <td class="px-3.5 py-3 text-xs text-[color:var(--color-muted)] uppercase font-mono">
+                    <td class="px-4 py-3 text-xs text-[color:var(--color-muted)] uppercase font-mono">
                       {line.source ?? '—'}
                     </td>
-                    <td class="px-3.5 py-3 text-right text-sm font-mono tabular-nums">
+                    <td class="px-4 py-3 text-right text-sm font-mono tabular-nums">
                       {fmtCurrencyFull(line.estimated)}
                     </td>
-                    <td class="px-3.5 py-3 text-right">
+                    <td class="px-4 py-3 text-right">
                       <input
                         type="number"
                         step="0.01"
@@ -221,7 +292,7 @@ function Detail(p: {
                         class="w-28 text-right bg-transparent border-0 outline-none px-1 py-1 tabular-nums font-mono text-sm focus:bg-[color:var(--color-surface-2)] rounded"
                       />
                     </td>
-                    <td class={['px-3.5 py-3 text-right text-sm font-mono tabular-nums', lvPct === null ? '' :
+                    <td class={['px-4 py-3 text-right text-sm font-mono tabular-nums', lvPct === null ? '' :
                       lvPct < 0 ? 'text-[color:var(--color-good)]' :
                       lvPct > 20 ? 'text-[color:var(--color-danger)]' :
                       lvPct > 5 ? 'text-[color:var(--color-warn)]' : 'text-[color:var(--color-ink)]'].join(' ')}>
@@ -238,6 +309,62 @@ function Detail(p: {
       </div>
     </div>
   );
+}
+
+function ProgressRing(p: { percent: number; state: JobState }) {
+  // 76px outer, 6px stroke. Ring uses accent for in-progress, good for
+  // closed, muted for scheduled (no progress yet).
+  const radius = 32;
+  const stroke = 6;
+  const circumference = 2 * Math.PI * radius;
+  const dash = (p.percent / 100) * circumference;
+  const ringColor = () =>
+    p.state === 'CLOSED'
+      ? 'var(--color-good)'
+      : p.state === 'SCHEDULED'
+        ? 'var(--color-muted-2)'
+        : 'var(--color-accent)';
+  return (
+    <div class="relative w-[76px] h-[76px] shrink-0" aria-label={`${p.percent}% complete`}>
+      <svg width="76" height="76" viewBox="0 0 76 76" class="-rotate-90">
+        <circle
+          cx="38"
+          cy="38"
+          r={radius}
+          fill="none"
+          stroke="var(--color-bg-2)"
+          stroke-width={stroke}
+        />
+        <circle
+          cx="38"
+          cy="38"
+          r={radius}
+          fill="none"
+          stroke={ringColor()}
+          stroke-width={stroke}
+          stroke-linecap="round"
+          stroke-dasharray={`${dash} ${circumference}`}
+          style={{ transition: 'stroke-dasharray 400ms ease' }}
+        />
+      </svg>
+      <div class="absolute inset-0 grid place-items-center">
+        <div class="text-center">
+          <div class="font-serif text-[18px] font-medium tabular-nums leading-none">
+            {p.percent}
+            <span class="text-[10px] text-[color:var(--color-muted)] ml-0.5">%</span>
+          </div>
+          <div class="text-[9px] font-mono uppercase tracking-wide text-[color:var(--color-muted-2)] mt-0.5">
+            {p.state === 'CLOSED' ? 'Closed' : p.state === 'SCHEDULED' ? 'Scheduled' : 'In progress'}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function fmtDate(iso: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function Tile(p: { label: string; value: string; sub?: string; valueClass?: string }) {
