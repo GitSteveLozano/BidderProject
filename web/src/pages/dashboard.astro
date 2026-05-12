@@ -1,0 +1,214 @@
+---
+import Brief from '@/layouts/Brief.astro';
+import Pill from '@/components/ui/Pill';
+import { client as supabaseService } from '@/lib/supabase';
+import { fmtCurrencyCompact, fmtRelativeDate } from '@/lib/quote-helpers';
+
+export const prerender = false;
+Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
+Astro.response.headers.set('cdn-cache-control', 'no-store');
+
+const env = Astro.locals.runtime?.env;
+const user = Astro.locals.user;
+const membership = Astro.locals.membership;
+if (!user || !membership || !env) {
+  return Astro.redirect('/auth/signin?next=/dashboard');
+}
+
+const svc = supabaseService(env, 'service');
+const { data: shop } = await svc
+  .from('shops')
+  .select('legal_name, trade_name, owner_name, data_state')
+  .eq('id', membership.shop_id)
+  .maybeSingle();
+
+const { data: quotes } = await svc
+  .from('quotes')
+  .select('id, state, total, sent_at, created_at, responded_at')
+  .eq('shop_id', membership.shop_id);
+
+const { data: events } = await svc
+  .from('events')
+  .select('id, type, quote_id, actor, payload, created_at')
+  .eq('shop_id', membership.shop_id)
+  .order('created_at', { ascending: false })
+  .limit(10);
+
+// KPI computations (kept small + explicit so behavior survives port notes)
+const qs = quotes ?? [];
+const active = qs.filter((q) => ['DRAFT', 'SENT', 'AWAITING', 'RESPONDED'].includes(q.state));
+const decided = qs.filter((q) => q.state === 'WON' || q.state === 'LOST');
+const won = qs.filter((q) => q.state === 'WON');
+const pipelineValue = active.reduce((s, q) => s + Number(q.total ?? 0), 0);
+const winRatePct = decided.length >= 3 ? Math.round((won.length / decided.length) * 100) : null;
+const avgQuote =
+  qs.length > 0 ? qs.reduce((s, q) => s + Number(q.total ?? 0), 0) / qs.length : 0;
+
+// Pipeline funnel data
+const funnel: Array<{ label: string; count: number; value: number }> = [
+  { label: 'Draft',     count: 0, value: 0 },
+  { label: 'Sent',      count: 0, value: 0 },
+  { label: 'Awaiting',  count: 0, value: 0 },
+  { label: 'Responded', count: 0, value: 0 },
+];
+const idx: Record<string, number> = { DRAFT: 0, SENT: 1, AWAITING: 2, RESPONDED: 3 };
+for (const q of active) {
+  const i = idx[q.state];
+  if (i === undefined) continue;
+  funnel[i].count += 1;
+  funnel[i].value += Number(q.total ?? 0);
+}
+const funnelMax = Math.max(...funnel.map((f) => f.value), 1);
+
+const calibrating = shop?.data_state === 'calibrating';
+const coldStart = shop?.data_state === 'cold-start';
+
+const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
+const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
+const activeQuotes = active.length;
+
+const today = new Date();
+const dateLine = today.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+const eventLabels: Record<string, string> = {
+  'quote.sent': 'Sent',
+  'quote.opened': 'Opened',
+  'quote.responded': 'Client responded',
+  'nudge.sent': 'Nudge sent',
+  'quote.won': 'Marked won',
+  'quote.lost': 'Marked lost',
+};
+---
+
+<Brief
+  title="Dashboard"
+  active="dashboard"
+  shopLabel={shopLabel}
+  shopInitial={shopLabel.charAt(0).toUpperCase()}
+  ownerFirst={ownerFirst}
+  ownerRole={membership.role.charAt(0).toUpperCase() + membership.role.slice(1)}
+  dataState={shop?.data_state ?? 'cold-start'}
+  activeQuotes={activeQuotes}
+>
+  <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1">
+    {dateLine}
+  </div>
+  <h1 class="font-serif text-[40px] font-medium leading-tight tracking-tight">
+    Morning, {ownerFirst}.
+  </h1>
+
+  {coldStart && (
+    <div class="mt-10 mx-auto max-w-[480px] text-center px-6">
+      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
+        Cold start
+      </div>
+      <h2 class="font-serif text-[24px] font-medium leading-tight">
+        Numbers show up here after your first quote.
+      </h2>
+      <p class="mt-3 text-sm text-[color:var(--color-muted)] leading-relaxed">
+        There's nothing meaningful to chart yet — and we won't fake it. Send your first quote and the dashboard will start filling in.
+      </p>
+      <div class="mt-6">
+        <a
+          href="/generate"
+          class="inline-flex items-center px-4 py-2 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-sm font-medium hover:brightness-95"
+        >
+          Produce your first quote →
+        </a>
+      </div>
+    </div>
+  )}
+
+  {!coldStart && (
+    <>
+      {calibrating && (
+        <p class="mt-2 text-sm italic font-serif text-[color:var(--color-muted)]">
+          Trends hidden while Brief calibrates. Send a few more quotes and the dashboard will fill in.
+        </p>
+      )}
+
+      <div class="mt-6 grid grid-cols-3 gap-3">
+        <a href="/quotes" class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5 hover:bg-[color:var(--color-surface-2)] transition-colors">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Pipeline value</div>
+          <div class="mt-2 font-serif text-kpi font-medium tabular-nums">{fmtCurrencyCompact(pipelineValue)}</div>
+          <div class="mt-1 text-xs text-[color:var(--color-muted)]">{active.length} active quotes</div>
+        </a>
+        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Win rate · 90d</div>
+          <div class="mt-2 font-serif text-kpi font-medium tabular-nums">
+            {winRatePct != null ? `${winRatePct}%` : '—'}
+          </div>
+          <div class="mt-1 text-xs text-[color:var(--color-muted)]">
+            {decided.length < 3
+              ? `Need ${3 - decided.length} more decided quote${3 - decided.length === 1 ? '' : 's'}`
+              : `${won.length} of ${decided.length} won`}
+          </div>
+        </div>
+        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Avg quote</div>
+          <div class="mt-2 font-serif text-kpi font-medium tabular-nums">{fmtCurrencyCompact(avgQuote)}</div>
+          <div class="mt-1 text-xs text-[color:var(--color-muted)]">across {qs.length} quotes total</div>
+        </div>
+      </div>
+
+      <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-serif text-base font-medium">Pipeline value</h3>
+          <a href="/quotes" class="text-xs text-[color:var(--color-accent)] hover:brightness-95">See all →</a>
+        </div>
+        <div class="flex h-2 rounded-full overflow-hidden mb-3" aria-label="Pipeline funnel">
+          {funnel.map((f, i) => (
+            <div
+              class={[
+                'h-full',
+                i === 0 ? 'bg-[color:var(--color-muted-2)]' : '',
+                i === 1 ? 'bg-[color:var(--color-info)]' : '',
+                i === 2 ? 'bg-[color:var(--color-warn)]' : '',
+                i === 3 ? 'bg-[color:var(--color-accent)]' : '',
+              ].join(' ')}
+              style={{ width: `${f.value > 0 ? (f.value / funnelMax) * 100 : 4}%`, 'min-width': '4px' }}
+              title={`${f.label}: ${fmtCurrencyCompact(f.value)}`}
+            />
+          ))}
+        </div>
+        <div class="grid grid-cols-4 gap-4 text-sm">
+          {funnel.map((f) => (
+            <div>
+              <Pill tone="neutral" dot={false} size="sm">{f.label}</Pill>
+              <div class="mt-1 font-serif text-[18px] font-medium tabular-nums">
+                {fmtCurrencyCompact(f.value)}
+              </div>
+              <div class="text-xs text-[color:var(--color-muted)]">{f.count} {f.count === 1 ? 'quote' : 'quotes'}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+        <h3 class="font-serif text-base font-medium mb-3">Recent activity</h3>
+        {(events ?? []).length === 0 ? (
+          <p class="text-sm italic font-serif text-[color:var(--color-muted)]">
+            Nothing logged yet. Brief will populate this as quotes move.
+          </p>
+        ) : (
+          <ol class="space-y-2.5">
+            {(events ?? []).map((e: any) => (
+              <li class="flex items-baseline gap-3 text-sm">
+                <span class="w-1.5 h-1.5 rounded-full bg-[color:var(--color-accent)] shrink-0" aria-hidden="true" />
+                <span class="flex-1 min-w-0 truncate">
+                  {eventLabels[e.type] ?? e.type}
+                </span>
+                <time
+                  datetime={e.created_at}
+                  class="text-xs text-[color:var(--color-muted)] font-mono shrink-0"
+                >
+                  {fmtRelativeDate(e.created_at)}
+                </time>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </>
+  )}
+</Brief>
