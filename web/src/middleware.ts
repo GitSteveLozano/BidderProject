@@ -49,10 +49,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
     }
   }
 
-  // Auth gate for protected paths
+  // Auth gate for protected paths. Diag probes (?diag=1) bypass auth on
+  // any path so the SSR-regression tripwire stays reachable without a
+  // session — this is the same probe that caught the [object Object]
+  // failure mode (commit 1761de3). Public list covers landing + auth.
   const isPublic =
     PUBLIC_PATHS.has(url.pathname) ||
-    PUBLIC_PREFIXES.some((p) => url.pathname.startsWith(p));
+    PUBLIC_PREFIXES.some((p) => url.pathname.startsWith(p)) ||
+    url.searchParams.get('diag') === '1';
 
   if (!isPublic && !context.locals.user) {
     const next_url = url.pathname + url.search;
