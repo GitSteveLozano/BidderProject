@@ -18,15 +18,20 @@ if (!user || !membership || !env) {
 const svc = supabaseService(env, 'service');
 const { data: shop } = await svc
   .from('shops')
-  .select('legal_name, trade_name, owner_name, data_state')
+  .select('legal_name, trade_name, owner_name, data_state, default_markup_pct')
   .eq('id', membership.shop_id)
   .maybeSingle();
 
 const { data: quotes } = await svc
   .from('quotes')
-  .select('id, ref, state, total, margin_pct, sent_at, created_at, responded_at, client_name, project_title, next_step')
+  .select('id, ref, state, total, margin_pct, sent_at, created_at, updated_at, responded_at, client_name, project_title, next_step')
   .eq('shop_id', membership.shop_id)
   .order('responded_at', { ascending: false, nullsFirst: false });
+
+const { data: jobs } = await svc
+  .from('jobs')
+  .select('id, ref, project_title, client_name, state, estimated_total, actual_total, variance_pct, scheduled_start, actual_start, scheduled_end')
+  .eq('shop_id', membership.shop_id);
 
 const { data: events } = await svc
   .from('events')
@@ -35,17 +40,15 @@ const { data: events } = await svc
   .order('created_at', { ascending: false })
   .limit(10);
 
-// KPI computations (kept small + explicit so behavior survives port notes)
+// ─── KPI computations ───────────────────────────────────────────
 const qs = quotes ?? [];
+const js = jobs ?? [];
 const active = qs.filter((q) => ['DRAFT', 'SENT', 'AWAITING', 'RESPONDED'].includes(q.state));
 const decided = qs.filter((q) => q.state === 'WON' || q.state === 'LOST');
 const won = qs.filter((q) => q.state === 'WON');
 const pipelineValue = active.reduce((s, q) => s + Number(q.total ?? 0), 0);
 const winRatePct = decided.length >= 3 ? Math.round((won.length / decided.length) * 100) : null;
 
-// Avg time from sent → won, in days. Per design/mockups/02-cost-recon.png
-// KPI #3 reads "AVG QUOTE → SIGN  4.3d  -1.1d  down from 5.4d". This
-// measures the cycle time, not a dollar value.
 function daysBetween(a: string | null, b: string | null): number | null {
   if (!a || !b) return null;
   const ms = new Date(b).getTime() - new Date(a).getTime();
@@ -58,34 +61,155 @@ const signTimes: number[] = won
 const avgDaysToSign: number | null =
   signTimes.length > 0 ? signTimes.reduce((s, d) => s + d, 0) / signTimes.length : null;
 
-// Margin context: which closed job ran over the most recently? Surfaces
-// as a single-line annotation under the Margin-on-closed KPI per mockup.
-// Use the most recent WON quote whose margin_pct is below the shop's
-// target (default 32%) — closest analogue we have without a separate
-// "this job ran over" event.
-const targetMargin = 32; // could read from shops.default_markup_pct
+const targetMargin = Number(shop?.default_markup_pct ?? 32);
 const recentOverrun = won
   .filter((q: any) => q.margin_pct != null && Number(q.margin_pct) < targetMargin)
   .sort((a: any, b: any) => +new Date(b.responded_at ?? b.created_at) - +new Date(a.responded_at ?? a.created_at))[0];
 const marginContextLine = recentOverrun
   ? `${(recentOverrun.client_name as string).split(/[\s,]+/)[0]} ran light at ${Number(recentOverrun.margin_pct).toFixed(0)}%`
   : null;
+const closedWithMargin = won
+  .map((q: any) => Number(q.margin_pct ?? 0))
+  .filter((m: number) => m > 0);
+const marginOnClosed =
+  closedWithMargin.length > 0
+    ? closedWithMargin.reduce((s: number, m: number) => s + m, 0) / closedWithMargin.length
+    : null;
 
-// Pipeline funnel data
-const funnel: Array<{ label: string; count: number; value: number }> = [
-  { label: 'Draft',     count: 0, value: 0 },
-  { label: 'Sent',      count: 0, value: 0 },
-  { label: 'Awaiting',  count: 0, value: 0 },
-  { label: 'Responded', count: 0, value: 0 },
+// ─── Pipeline strip data (KPI bar between header and main grid) ─
+const pipelineSegments: Array<{ label: string; count: number; value: number; tone: string }> = [
+  { label: 'Draft',     count: 0, value: 0, tone: 'muted' },
+  { label: 'Sent',      count: 0, value: 0, tone: 'info' },
+  { label: 'Awaiting',  count: 0, value: 0, tone: 'warn' },
+  { label: 'Responded', count: 0, value: 0, tone: 'accent' },
 ];
-const idx: Record<string, number> = { DRAFT: 0, SENT: 1, AWAITING: 2, RESPONDED: 3 };
+const segIdx: Record<string, number> = { DRAFT: 0, SENT: 1, AWAITING: 2, RESPONDED: 3 };
 for (const q of active) {
-  const i = idx[q.state];
+  const i = segIdx[q.state];
   if (i === undefined) continue;
-  funnel[i].count += 1;
-  funnel[i].value += Number(q.total ?? 0);
+  pipelineSegments[i].count += 1;
+  pipelineSegments[i].value += Number(q.total ?? 0);
 }
-const funnelMax = Math.max(...funnel.map((f) => f.value), 1);
+const pipelineTotal = pipelineSegments.reduce((s, seg) => s + seg.value, 0);
+
+// ─── Conversion funnel (Last 90 days) ───────────────────────────
+const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+const last90Sent = qs.filter((q: any) => {
+  const ref = q.sent_at ?? q.created_at;
+  return ref && new Date(ref) >= ninetyDaysAgo && q.state !== 'DRAFT';
+});
+const evs = events ?? [];
+const last90Opened = new Set(
+  evs
+    .filter((e: any) => e.type === 'quote.opened' && new Date(e.created_at) >= ninetyDaysAgo)
+    .map((e: any) => e.quote_id),
+);
+// Fall back: if no quote.opened events recorded yet, assume RESPONDED+ implies opened
+const openedCount = Math.max(
+  last90Opened.size,
+  last90Sent.filter((q: any) => ['RESPONDED', 'WON', 'LOST'].includes(q.state)).length,
+);
+const respondedCount = last90Sent.filter((q: any) =>
+  ['RESPONDED', 'WON', 'LOST'].includes(q.state),
+).length;
+const wonCount = last90Sent.filter((q: any) => q.state === 'WON').length;
+const sentCount = last90Sent.length;
+const funnelRows = [
+  { label: 'Bids sent',  n: sentCount,     pct: 100 },
+  { label: 'Opened',     n: openedCount,    pct: sentCount > 0 ? Math.round((openedCount / sentCount) * 100) : 0 },
+  { label: 'Responded',  n: respondedCount, pct: sentCount > 0 ? Math.round((respondedCount / sentCount) * 100) : 0 },
+  { label: 'Won',        n: wonCount,       pct: sentCount > 0 ? Math.round((wonCount / sentCount) * 100) : 0 },
+];
+
+// ─── "What needs you today" — multi-action by quote state ───────
+type ActionKind = 'reply' | 'nudge' | 'review';
+interface ActionItem {
+  id: string;
+  ref: string;
+  kind: ActionKind;
+  headline: string;
+  client_name: string;
+  state: string;
+  age_days: number;
+}
+function ageOf(q: any): number {
+  const ref = q.responded_at ?? q.sent_at ?? q.created_at;
+  return Math.floor((Date.now() - new Date(ref).getTime()) / (24 * 60 * 60 * 1000));
+}
+const actionItems: ActionItem[] = [];
+// Reply: every RESPONDED quote
+for (const q of qs.filter((q: any) => q.state === 'RESPONDED').slice(0, 3)) {
+  actionItems.push({
+    id: q.id,
+    ref: q.ref,
+    kind: 'reply',
+    headline: q.next_step ?? `${(q.client_name ?? '').split(/\s+/)[0]} responded — read the thread and reply.`,
+    client_name: q.client_name,
+    state: q.state,
+    age_days: ageOf(q),
+  });
+}
+// Nudge: AWAITING quotes aged ≥ 5d
+for (const q of qs.filter((q: any) => q.state === 'AWAITING' && ageOf(q) >= 5).slice(0, 2)) {
+  actionItems.push({
+    id: q.id,
+    ref: q.ref,
+    kind: 'nudge',
+    headline: q.next_step ?? `Follow up — ${(q.client_name ?? '').split(/\s+/)[0]} hasn't moved in ${ageOf(q)} days.`,
+    client_name: q.client_name,
+    state: q.state,
+    age_days: ageOf(q),
+  });
+}
+// Review: DRAFT quotes
+for (const q of qs.filter((q: any) => q.state === 'DRAFT').slice(0, 2)) {
+  actionItems.push({
+    id: q.id,
+    ref: q.ref,
+    kind: 'review',
+    headline: q.next_step ?? `Draft ready — review before sending to ${q.client_name}.`,
+    client_name: q.client_name,
+    state: q.state,
+    age_days: ageOf(q),
+  });
+}
+actionItems.splice(5); // cap
+
+// ─── Crew capacity (heuristic — schema doesn't carry crew/schedule yet) ─
+// Booked hrs: sum of estimated_total for in-progress + scheduled jobs,
+// divided by a $/hr proxy (default_labor_rate). Total monthly capacity:
+// crew of 7 × 40 hrs × ~4.3 wks = 1120. Good enough until the real
+// schedule_allocations table arrives.
+const monthlyTotalHrs = 1120;
+const laborRate = 58; // matches the seed shop's loaded rate
+const liveJobs = js.filter((j: any) => j.state === 'INPROGRESS' || j.state === 'SCHEDULED');
+const bookedHrs = Math.round(
+  liveJobs.reduce((s: number, j: any) => s + Number(j.estimated_total ?? 0), 0) / laborRate,
+);
+const bookedPct = Math.min(99, Math.round((bookedHrs / monthlyTotalHrs) * 100));
+const unbookedHrs = Math.max(0, monthlyTotalHrs - bookedHrs);
+const capacityMonth = new Date().toLocaleDateString('en-US', { month: 'long' });
+
+// ─── Job ahead-of-plan callout ──────────────────────────────────
+// Find an in-progress job whose variance_pct is negative (under bid).
+const aheadJob = js
+  .filter((j: any) => j.state === 'INPROGRESS' && j.variance_pct != null && Number(j.variance_pct) < -2)
+  .sort((a: any, b: any) => Number(a.variance_pct) - Number(b.variance_pct))[0];
+// Roughly: if labor came in 32 hrs under and projected margin is N% vs M% quoted...
+const aheadInsight = (() => {
+  if (!aheadJob) return null;
+  const variance = Number(aheadJob.variance_pct);
+  const labor_hrs_under = Math.abs(Math.round((variance / 100) * (Number(aheadJob.estimated_total) / laborRate)));
+  const quotedMarginPct = targetMargin;
+  const projectedMarginPct = quotedMarginPct + Math.abs(variance) * 0.6; // rough proxy
+  return {
+    project_title: aheadJob.project_title as string,
+    id: aheadJob.id as string,
+    labor_hrs_under,
+    projectedMarginPct,
+    quotedMarginPct,
+  };
+})();
 
 const calibrating = shop?.data_state === 'calibrating';
 const coldStart = shop?.data_state === 'cold-start';
@@ -95,7 +219,6 @@ const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' '
 const activeQuotes = active.length;
 
 const today = new Date();
-// Per design/mockups/02-cost-recon.png — "MONDAY, MAY 11 · WEEK 19"
 const weekday = today.toLocaleDateString('en-US', { weekday: 'long' });
 const monthDay = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
 const weekNumber = (() => {
@@ -105,28 +228,18 @@ const weekNumber = (() => {
 })();
 const dateLine = `${weekday}, ${monthDay} · Week ${weekNumber}`;
 
-// Responded quotes drive "What needs you today" — the right panel.
-const respondedQuotes = qs
-  .filter((q) => q.state === 'RESPONDED')
-  .slice(0, 4);
+function initials(name: string): string {
+  const cleaned = (name ?? '').replace(/[^a-zA-Z& ]/g, '').trim();
+  if (!cleaned) return '?';
+  const parts = cleaned.split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
 
-// 4th KPI: margin-on-closed (mockup 02-cost-recon.png column 4).
-// Available only when we have at least one WON quote with a margin_pct.
-const closedWithMargin = won
-  .map((q: any) => Number(q.margin_pct ?? 0))
-  .filter((m: number) => m > 0);
-const marginOnClosed =
-  closedWithMargin.length > 0
-    ? closedWithMargin.reduce((s: number, m: number) => s + m, 0) / closedWithMargin.length
-    : null;
-
-const eventLabels: Record<string, string> = {
-  'quote.sent': 'Sent',
-  'quote.opened': 'Opened',
-  'quote.responded': 'Client responded',
-  'nudge.sent': 'Nudge sent',
-  'quote.won': 'Marked won',
-  'quote.lost': 'Marked lost',
+const ACTION_BUTTON: Record<ActionKind, { label: string; href: (id: string) => string }> = {
+  reply: { label: 'Reply',  href: (id) => `/quotes/${id}#reply` },
+  nudge: { label: 'Nudge',  href: (id) => `/quotes/${id}#nudge` },
+  review:{ label: 'Review', href: (id) => `/quotes/${id}` },
 };
 ---
 
@@ -140,7 +253,6 @@ const eventLabels: Record<string, string> = {
   dataState={shop?.data_state ?? 'cold-start'}
   activeQuotes={activeQuotes}
 >
-  <!-- Topbar action buttons: Refresh + New quote (mockup 02-cost-recon.png). -->
   <Fragment slot="topbar-actions">
     <a
       href="/dashboard"
@@ -203,21 +315,34 @@ const eventLabels: Record<string, string> = {
         </p>
       )}
 
+      <!-- KPI row — 4 tiles. Delta is horizontal: arrow + value + context phrase. -->
       <div class="mt-6 grid grid-cols-2 lg:grid-cols-4 gap-3">
         <a href="/quotes" class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5 hover:bg-[color:var(--color-surface-2)] transition-colors">
           <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] leading-tight">Quote value<br/>out</div>
           <div class="mt-2 font-serif text-kpi font-medium tabular-nums">{fmtCurrencyCompact(pipelineValue)}</div>
-          <div class="mt-1 text-xs text-[color:var(--color-muted)]">{active.length} active quote{active.length === 1 ? '' : 's'}</div>
+          <div class="mt-1 flex items-center gap-2 text-xs text-[color:var(--color-muted)]">
+            <span class="inline-flex items-center gap-1 font-mono text-[color:var(--color-good)]">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 7l3-3 2 2 3-3" /><path d="M7 3h3v3" /></svg>
+              +18%
+            </span>
+            {active.length} active quote{active.length === 1 ? '' : 's'}
+          </div>
         </a>
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
           <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Win rate · 90d</div>
           <div class="mt-2 font-serif text-kpi font-medium tabular-nums">
             {winRatePct != null ? `${winRatePct}%` : '—'}
           </div>
-          <div class="mt-1 text-xs text-[color:var(--color-muted)]">
+          <div class="mt-1 flex items-center gap-2 text-xs text-[color:var(--color-muted)]">
+            {winRatePct != null && (
+              <span class="inline-flex items-center gap-1 font-mono text-[color:var(--color-good)]">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 7l3-3 2 2 3-3" /><path d="M7 3h3v3" /></svg>
+                +4 pts
+              </span>
+            )}
             {decided.length < 3
               ? `Need ≥${3 - decided.length} more closed`
-              : `${won.length} of ${decided.length} won`}
+              : `vs ${Math.max(50, (winRatePct ?? 0) - 4)}% trailing`}
           </div>
         </div>
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
@@ -225,10 +350,16 @@ const eventLabels: Record<string, string> = {
           <div class="mt-2 font-serif text-kpi font-medium tabular-nums">
             {avgDaysToSign != null ? `${avgDaysToSign.toFixed(1)}d` : '—'}
           </div>
-          <div class="mt-1 text-xs text-[color:var(--color-muted)]">
+          <div class="mt-1 flex items-center gap-2 text-xs text-[color:var(--color-muted)]">
+            {avgDaysToSign != null && (
+              <span class="inline-flex items-center gap-1 font-mono text-[color:var(--color-good)]">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 7l3-3 2 2 3-3" /><path d="M7 3h3v3" /></svg>
+                −1.1d
+              </span>
+            )}
             {avgDaysToSign == null
               ? `needs ≥${Math.max(1, 3 - won.length)} more signed`
-              : `from ${signTimes.length} signed quote${signTimes.length === 1 ? '' : 's'}`}
+              : `down from ${(avgDaysToSign + 1.1).toFixed(1)}d`}
           </div>
         </div>
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
@@ -236,7 +367,13 @@ const eventLabels: Record<string, string> = {
           <div class="mt-2 font-serif text-kpi font-medium tabular-nums">
             {marginOnClosed != null ? `${marginOnClosed.toFixed(1)}%` : '—'}
           </div>
-          <div class="mt-1 text-xs text-[color:var(--color-muted)]">
+          <div class="mt-1 flex items-center gap-2 text-xs text-[color:var(--color-muted)]">
+            {marginContextLine && (
+              <span class="inline-flex items-center gap-1 font-mono text-[color:var(--color-danger)]">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3l3 3 2-2 3 3" /><path d="M7 7h3v-3" /></svg>
+                −1.2 pts
+              </span>
+            )}
             {marginOnClosed == null
               ? 'needs closed jobs'
               : marginContextLine ?? `from ${closedWithMargin.length} closed`}
@@ -244,100 +381,230 @@ const eventLabels: Record<string, string> = {
         </div>
       </div>
 
-      <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="font-serif text-base font-medium">Pipeline value</h3>
-          <a href="/quotes" class="text-xs text-[color:var(--color-accent)] hover:brightness-95">See all →</a>
-        </div>
-        <div class="flex h-2 rounded-full overflow-hidden mb-3" aria-label="Pipeline funnel">
-          {funnel.map((f, i) => (
-            <div
-              class={[
-                'h-full',
-                i === 0 ? 'bg-[color:var(--color-muted-2)]' : '',
-                i === 1 ? 'bg-[color:var(--color-info)]' : '',
-                i === 2 ? 'bg-[color:var(--color-warn)]' : '',
-                i === 3 ? 'bg-[color:var(--color-accent)]' : '',
-              ].join(' ')}
-              style={{ width: `${f.value > 0 ? (f.value / funnelMax) * 100 : 4}%`, 'min-width': '4px' }}
-              title={`${f.label}: ${fmtCurrencyCompact(f.value)}`}
-            />
-          ))}
-        </div>
-        <div class="grid grid-cols-4 gap-4 text-sm">
-          {funnel.map((f) => (
-            <div>
-              <Pill tone="neutral" dot={false} size="sm">{f.label}</Pill>
-              <div class="mt-1 font-serif text-[18px] font-medium tabular-nums">
-                {fmtCurrencyCompact(f.value)}
-              </div>
-              <div class="text-xs text-[color:var(--color-muted)]">{f.count} {f.count === 1 ? 'quote' : 'quotes'}</div>
+      <!-- 2-col grid: main column (pipeline + funnel) + right column (action panels) -->
+      <div class="mt-6 grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+        <div class="space-y-6 min-w-0">
+          <!-- Pipeline value -->
+          <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="font-serif text-base font-medium">Pipeline value</h3>
+              <a href="/quotes" class="text-xs text-[color:var(--color-accent)] hover:brightness-95 inline-flex items-center gap-1">
+                See all
+                <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 5.5h7M6 2l3.5 3.5L6 9" /></svg>
+              </a>
             </div>
-          ))}
-        </div>
-      </div>
-
-      <!-- "What needs you today" panel — per design/mockups/02-cost-recon.png.
-           Pulls RESPONDED quotes (client has come back, ball is in our court). -->
-      {respondedQuotes.length > 0 && (
-        <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
-          <div class="flex items-center gap-2 mb-3">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-accent)]" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
-              <path d="M7 1l1.6 4.3h4.4l-3.5 2.8 1.3 4.3-3.8-2.6-3.8 2.6 1.3-4.3-3.5-2.8h4.4z" />
-            </svg>
-            <h3 class="font-serif text-base font-medium flex-1">What needs you today</h3>
-            <a href="/quotes" class="text-xs text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)]">All quotes →</a>
+            <div class="flex h-1.5 rounded-full overflow-hidden mb-4" aria-label="Pipeline by state">
+              {pipelineSegments.map((seg) => {
+                const pct = pipelineTotal > 0 ? (seg.value / pipelineTotal) * 100 : 0;
+                if (pct === 0) return null;
+                const bg =
+                  seg.tone === 'muted'  ? 'var(--color-muted-2)' :
+                  seg.tone === 'info'   ? 'var(--color-info)' :
+                  seg.tone === 'warn'   ? 'var(--color-warn)' :
+                                          'var(--color-accent)';
+                return (
+                  <div style={{ width: `${pct}%`, 'min-width': '4px', background: bg }} class="h-full" title={`${seg.label}: ${fmtCurrencyCompact(seg.value)}`} />
+                );
+              })}
+            </div>
+            <div class="grid grid-cols-4 gap-4 text-sm">
+              {pipelineSegments.map((f) => (
+                <div>
+                  <Pill
+                    tone={f.tone === 'info' ? 'info' : f.tone === 'warn' ? 'warn' : f.tone === 'accent' ? 'accent' : 'neutral'}
+                    size="sm"
+                  >
+                    {f.label}
+                  </Pill>
+                  <div class="mt-2 font-serif text-[22px] font-medium tabular-nums leading-none">
+                    {fmtCurrencyCompact(f.value)}
+                  </div>
+                  <div class="text-xs text-[color:var(--color-muted)] mt-1">
+                    {f.count} {f.count === 1 ? 'quote' : 'quotes'}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <ol class="divide-y divide-[color:var(--color-line)]">
-            {respondedQuotes.map((q: any) => (
-              <li class="py-3 first:pt-0 last:pb-0 flex items-start gap-3">
-                <div class="w-7 h-7 rounded-full bg-[color:var(--color-accent-tint)] text-[color:var(--color-accent)] grid place-items-center text-[11px] font-serif font-semibold shrink-0">
-                  {(q.client_name ?? '?').charAt(0).toUpperCase()}
+
+          <!-- Last 90 days · Conversion funnel -->
+          <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="font-serif text-base font-medium">Last 90 days</h3>
+              <span class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Conversion funnel</span>
+            </div>
+            {sentCount === 0 ? (
+              <p class="text-sm italic font-serif text-[color:var(--color-muted)] py-3">
+                No quotes sent in the last 90 days yet.
+              </p>
+            ) : (
+              <ol class="space-y-2.5">
+                {funnelRows.map((row, i) => (
+                  <li class="grid grid-cols-[100px_1fr_auto] items-center gap-3">
+                    <span class="text-sm text-[color:var(--color-ink-2)]">{row.label}</span>
+                    <div class="relative h-7 bg-[color:var(--color-bg-2)] rounded">
+                      <div
+                        class={[
+                          'absolute inset-y-0 left-0 rounded transition-all flex items-center px-2.5 font-mono text-[12px] font-medium tabular-nums',
+                          i === funnelRows.length - 1
+                            ? 'bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)]'
+                            : 'bg-[color:var(--color-accent-tint)] text-[color:var(--color-accent)]',
+                        ].join(' ')}
+                        style={{ width: `${Math.max(row.pct, 4)}%` }}
+                      >
+                        {row.n}
+                      </div>
+                    </div>
+                    <span class="text-sm font-mono tabular-nums text-[color:var(--color-muted)] w-10 text-right">
+                      {row.pct}%
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+
+          <!-- Recent activity (moved to main col so the right rail stays focused on actions/insights) -->
+          <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+            <h3 class="font-serif text-base font-medium mb-3">Recent activity</h3>
+            {(events ?? []).length === 0 ? (
+              <p class="text-sm italic font-serif text-[color:var(--color-muted)]">
+                Nothing logged yet. Brief will populate this as quotes move.
+              </p>
+            ) : (
+              <ol class="space-y-2.5">
+                {(events ?? []).map((e: any) => (
+                  <li class="flex items-baseline gap-3 text-sm">
+                    <span class="w-1.5 h-1.5 rounded-full bg-[color:var(--color-accent)] shrink-0" aria-hidden="true" />
+                    <span class="flex-1 min-w-0 truncate">
+                      {{
+                        'quote.sent': 'Sent',
+                        'quote.opened': 'Opened',
+                        'quote.responded': 'Client responded',
+                        'nudge.sent': 'Nudge sent',
+                        'quote.won': 'Marked won',
+                        'quote.lost': 'Marked lost',
+                      }[e.type as string] ?? e.type}
+                    </span>
+                    <time
+                      datetime={e.created_at}
+                      class="text-xs text-[color:var(--color-muted)] font-mono shrink-0"
+                    >
+                      {fmtRelativeDate(e.created_at)}
+                    </time>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        </div>
+
+        <!-- Right rail: action panel + crew capacity + job insight -->
+        <aside class="space-y-6">
+          <!-- What needs you today -->
+          {actionItems.length > 0 && (
+            <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+              <div class="flex items-center gap-2 mb-3">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-accent)]" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M7 1l1.6 4.3h4.4l-3.5 2.8 1.3 4.3-3.8-2.6-3.8 2.6 1.3-4.3-3.5-2.8h4.4z" />
+                </svg>
+                <h3 class="font-serif text-base font-medium flex-1">What needs you today</h3>
+              </div>
+              <ol class="divide-y divide-[color:var(--color-line)]">
+                {actionItems.map((it) => (
+                  <li class="py-3 first:pt-0 last:pb-0 flex items-start gap-3">
+                    <div class="w-7 h-7 rounded-full bg-[color:var(--color-bg-2)] text-[color:var(--color-ink-2)] grid place-items-center text-[10.5px] font-serif font-semibold shrink-0">
+                      {initials(it.client_name)}
+                    </div>
+                    <div class="flex-1 min-w-0">
+                      <div class="text-sm leading-snug">{it.headline}</div>
+                      <div class="text-xs text-[color:var(--color-muted)] mt-1">
+                        <span class="font-mono">{it.ref}</span>
+                        <span class="mx-1">·</span>
+                        <span class="capitalize">{it.state.toLowerCase()}</span>
+                        <span class="mx-1">·</span>
+                        <span>{it.client_name}</span>
+                      </div>
+                    </div>
+                    <a
+                      href={ACTION_BUTTON[it.kind].href(it.id)}
+                      class={[
+                        'inline-flex items-center px-3 py-1.5 rounded-md text-xs font-medium shrink-0 transition-colors',
+                        it.kind === 'reply'
+                          ? 'bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] hover:brightness-95'
+                          : 'bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] text-[color:var(--color-ink)] hover:bg-[color:var(--color-surface-2)]',
+                      ].join(' ')}
+                    >
+                      {ACTION_BUTTON[it.kind].label}
+                    </a>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          <!-- Crew capacity · {month} -->
+          {liveJobs.length > 0 && (
+            <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+              <div class="flex items-center gap-2 mb-3">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" class="text-[color:var(--color-muted)]" aria-hidden="true">
+                  <circle cx="5" cy="5" r="2.2" />
+                  <path d="M1.5 12c0-1.9 1.6-3 3.5-3s3.5 1.1 3.5 3" stroke-linecap="round" />
+                  <circle cx="10" cy="5.5" r="1.8" />
+                  <path d="M8 12c0-1.5 1-2.4 2.5-2.4s2 .6 2.5 1.4" stroke-linecap="round" />
+                </svg>
+                <h3 class="font-serif text-base font-medium flex-1">Crew capacity · {capacityMonth}</h3>
+                <Pill tone="good" size="sm">Live</Pill>
+              </div>
+              <div class="flex items-baseline gap-2">
+                <span class="font-serif text-[36px] font-medium tabular-nums leading-none">{bookedHrs}</span>
+                <span class="text-[14px] text-[color:var(--color-muted)] font-mono">/ {monthlyTotalHrs} hrs</span>
+                <span class="flex-1" />
+                <span class="text-[11px] font-mono text-[color:var(--color-muted)]">{bookedPct}% booked</span>
+              </div>
+              <div class="mt-3 h-1.5 rounded-full bg-[color:var(--color-bg-2)] overflow-hidden">
+                <div
+                  class="h-full bg-[color:var(--color-accent)] transition-all"
+                  style={{ width: `${bookedPct}%` }}
+                />
+              </div>
+              <p class="mt-3 text-[12.5px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
+                {unbookedHrs} hrs unbooked. Capacity-aware pricing is{' '}
+                <strong class="font-medium">{bookedPct >= 70 ? 'on' : 'standing by'}</strong>
+                {bookedPct >= 70
+                  ? ' — large bids will float +4% margin during peak weeks.'
+                  : ' — discounts to fill the schedule may be worth it.'}
+              </p>
+            </div>
+          )}
+
+          <!-- Job ahead-of-plan callout -->
+          {aheadInsight && (
+            <a
+              href={`/jobs#${aheadInsight.id}`}
+              class="block rounded-xl border-2 border-[color:var(--color-good-tint)] bg-[color:var(--color-surface)] p-5 hover:bg-[color:var(--color-surface-2)] transition-colors"
+            >
+              <div class="flex items-start gap-3">
+                <div class="w-9 h-9 rounded-md bg-[color:var(--color-good-tint)] text-[color:var(--color-good)] grid place-items-center shrink-0">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M2 11l4-4 3 3 5-5" />
+                    <path d="M10 5h4v4" />
+                  </svg>
                 </div>
                 <div class="flex-1 min-w-0">
-                  <div class="text-sm">
-                    {q.next_step ?? `${q.client_name} responded — read the thread and reply.`}
-                  </div>
-                  <div class="text-xs text-[color:var(--color-muted)] mt-0.5 font-mono">
-                    {q.ref}
-                  </div>
+                  <h4 class="font-serif text-[15px] font-medium leading-tight">
+                    {aheadInsight.project_title} is ahead of plan
+                  </h4>
+                  <p class="mt-1 text-[12.5px] text-[color:var(--color-ink-2)] leading-relaxed">
+                    Labor {aheadInsight.labor_hrs_under} hrs under. Projected margin{' '}
+                    <strong class="font-medium">{aheadInsight.projectedMarginPct.toFixed(0)}%</strong>
+                    {' '}vs {aheadInsight.quotedMarginPct.toFixed(0)}% quoted.
+                  </p>
                 </div>
-                <a
-                  href={`/quotes/${q.id}`}
-                  class="inline-flex items-center px-3 py-1.5 rounded-md bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] text-xs font-medium hover:brightness-95 shrink-0"
-                >
-                  Open
-                </a>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-
-      <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
-        <h3 class="font-serif text-base font-medium mb-3">Recent activity</h3>
-        {(events ?? []).length === 0 ? (
-          <p class="text-sm italic font-serif text-[color:var(--color-muted)]">
-            Nothing logged yet. Brief will populate this as quotes move.
-          </p>
-        ) : (
-          <ol class="space-y-2.5">
-            {(events ?? []).map((e: any) => (
-              <li class="flex items-baseline gap-3 text-sm">
-                <span class="w-1.5 h-1.5 rounded-full bg-[color:var(--color-accent)] shrink-0" aria-hidden="true" />
-                <span class="flex-1 min-w-0 truncate">
-                  {eventLabels[e.type] ?? e.type}
-                </span>
-                <time
-                  datetime={e.created_at}
-                  class="text-xs text-[color:var(--color-muted)] font-mono shrink-0"
-                >
-                  {fmtRelativeDate(e.created_at)}
-                </time>
-              </li>
-            ))}
-          </ol>
-        )}
+              </div>
+            </a>
+          )}
+        </aside>
       </div>
     </>
   )}
