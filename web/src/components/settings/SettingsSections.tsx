@@ -61,7 +61,9 @@ export default function SettingsSections() {
         <ShopSection shop={shop()!} saving={savingKey() === 'shop'} onSave={(p) => onSave('shop', p)} />
         <LicenseSection shop={shop()!} saving={savingKey() === 'license'} onSave={(p) => onSave('license', p)} />
         <PricingSection shop={shop()!} saving={savingKey() === 'pricing'} onSave={(p) => onSave('pricing', p)} />
+        <VoiceProfileSection shop={shop()!} saving={savingKey() === 'voice'} onSave={(p) => onSave('voice', p)} />
         <IntegrationsSection shop={shop()!} onSave={(p) => onSave('integrations', p)} />
+        <DeliveryStatusSection />
         <DataExportSection shopId={shop()!.id} />
       </div>
       <Show when={errorKey()}>
@@ -257,6 +259,156 @@ function IntegrationsSection(props: { shop: Shop; onSave: (p: Partial<Shop>) => 
             );
           }}
         </For>
+      </div>
+    </Card>
+  );
+}
+
+function VoiceProfileSection(props: { shop: Shop; saving: boolean; onSave: (p: Partial<Shop>) => void }) {
+  const initialProfile = props.shop.voice_profile ?? {};
+  const [intro, setIntro] = createSignal<string>(initialProfile.boilerplate_intro ?? '');
+  const [closing, setClosing] = createSignal<string>(initialProfile.boilerplate_closing ?? '');
+
+  const tone = initialProfile.tone as string | undefined;
+  const preferredTerms = (initialProfile.preferred_terms as string[] | undefined) ?? [];
+  const avoidTerms = (initialProfile.avoid_terms as string[] | undefined) ?? [];
+  const calibratedAt = props.shop.voice_sample_processed_at as string | undefined;
+
+  const save = () => {
+    props.onSave({
+      voice_profile: {
+        ...initialProfile,
+        boilerplate_intro: intro().trim() || null,
+        boilerplate_closing: closing().trim() || null,
+      },
+    });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <h3 class="font-serif text-base font-medium flex-1">Voice</h3>
+        <Show when={calibratedAt}>
+          <Pill tone="good" size="sm" dot={false}>
+            Calibrated
+          </Pill>
+        </Show>
+      </CardHeader>
+      <CardBody>
+        <Show when={tone || preferredTerms.length > 0}>
+          <div class="rounded-lg bg-[color:var(--color-surface-2)] border border-[color:var(--color-line)] px-4 py-3 mb-4 text-[13px] leading-relaxed">
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-1.5">
+              What Brief learned
+            </div>
+            <Show when={tone}>
+              <div class="text-[color:var(--color-ink-2)]">
+                <strong class="font-medium">Tone:</strong> <span class="font-serif italic">{tone}</span>
+              </div>
+            </Show>
+            <Show when={preferredTerms.length > 0}>
+              <div class="mt-1 text-[color:var(--color-ink-2)]">
+                <strong class="font-medium">You say:</strong>{' '}
+                <span class="font-mono text-[12px] text-[color:var(--color-muted)]">
+                  {preferredTerms.join(', ')}
+                </span>
+              </div>
+            </Show>
+            <Show when={avoidTerms.length > 0}>
+              <div class="mt-1 text-[color:var(--color-ink-2)]">
+                <strong class="font-medium">You don't say:</strong>{' '}
+                <span class="font-mono text-[12px] text-[color:var(--color-muted)]">
+                  {avoidTerms.join(', ')}
+                </span>
+              </div>
+            </Show>
+          </div>
+        </Show>
+        <Show when={!tone && preferredTerms.length === 0}>
+          <p class="text-sm italic font-serif text-[color:var(--color-muted)] mb-4 leading-relaxed">
+            No voice signal yet. Run the onboarding sample (or paste 5+ paragraphs from a real quote) and Brief learns how you write.
+          </p>
+        </Show>
+
+        <Field
+          label="Boilerplate intro"
+          helper="Goes above the line items on the PDF + at the top of email drafts. Optional."
+        >
+          <textarea
+            rows={3}
+            value={intro()}
+            onInput={(e) => setIntro(e.currentTarget.value)}
+            placeholder="Thanks for thinking of us on this one — here's what we'd put together."
+            class="w-full px-3 py-2.5 rounded-lg text-sm text-[color:var(--color-ink)] font-sans bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] focus:outline-none focus:border-[color:var(--color-accent)] focus:shadow-[0_0_0_3px_var(--color-accent-tint)] resize-y leading-relaxed"
+          />
+        </Field>
+        <div class="mt-3">
+          <Field
+            label="Sign-off"
+            helper="Ends every Reply / Nudge draft. Keep it short — one line."
+          >
+            <Input
+              value={closing()}
+              onInput={(e) => setClosing(e.currentTarget.value)}
+              placeholder="Talk soon, — Cavy"
+            />
+          </Field>
+        </div>
+      </CardBody>
+      <CardFooter>
+        <div class="flex-1" />
+        <Button variant="accent" onClick={save} disabled={props.saving}>
+          {props.saving ? 'Saving…' : 'Save'}
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+}
+
+function DeliveryStatusSection() {
+  const [report] = createResource(async () => {
+    const resp = await fetch('/api/health/delivery');
+    if (!resp.ok) throw new Error(`Health probe ${resp.status}`);
+    return resp.json() as Promise<{
+      brevo: { configured: boolean; ok: boolean; detail: string };
+      twilio: { configured: boolean; ok: boolean; detail: string };
+    }>;
+  });
+
+  const row = (
+    name: string,
+    state: { configured: boolean; ok: boolean; detail: string } | undefined,
+  ) => {
+    const tone = !state || !state.configured ? 'neutral' : state.ok ? 'good' : 'warn';
+    const label = !state ? 'Loading…' : !state.configured ? 'Not configured' : state.ok ? 'Ready' : 'Issue';
+    return (
+      <div class="flex items-start gap-3 px-5 py-3.5 border-t border-[color:var(--color-line)] first:border-t-0">
+        <div class="flex-1 min-w-0">
+          <div class="font-medium text-sm">{name}</div>
+          <Show when={state}>
+            <div class="text-xs text-[color:var(--color-muted)] mt-0.5 leading-relaxed">
+              {state!.detail}
+            </div>
+          </Show>
+        </div>
+        <Pill tone={tone as any} size="sm">{label}</Pill>
+      </div>
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <h3 class="font-serif text-base font-medium flex-1">Delivery</h3>
+        <a
+          href="/api/health/delivery"
+          class="text-xs text-[color:var(--color-accent)] hover:brightness-95 underline"
+        >
+          Raw JSON ↗
+        </a>
+      </CardHeader>
+      <div>
+        {row('Brevo (email)', report()?.brevo)}
+        {row('Twilio (SMS)', report()?.twilio)}
       </div>
     </Card>
   );
