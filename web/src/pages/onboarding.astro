@@ -1,0 +1,43 @@
+---
+import Base from '@/layouts/Base.astro';
+import OnboardingFlow from '@/components/onboarding/OnboardingFlow';
+import { client as supabaseService } from '@/lib/supabase';
+
+export const prerender = false;
+Astro.response.headers.set('cache-control', 'no-store');
+Astro.response.headers.set('cdn-cache-control', 'no-store');
+
+const env = Astro.locals.runtime?.env;
+const user = Astro.locals.user;
+const membership = Astro.locals.membership;
+
+// Auth middleware should have redirected; defensive check
+if (!user || !membership || !env) {
+  return Astro.redirect('/auth/signin?next=/onboarding');
+}
+
+// If onboarding already completed, skip to dashboard
+const svc = supabaseService(env, 'service');
+const { data: shop } = await svc
+  .from('shops')
+  .select('onboarding_completed_at, google_calendar_connected, owner_name, owner_email')
+  .eq('id', membership.shop_id)
+  .maybeSingle();
+
+if (shop?.onboarding_completed_at) {
+  return Astro.redirect('/dashboard');
+}
+
+const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? 'there').split(' ')[0];
+---
+
+<Base title="Set up Brief">
+  <OnboardingFlow
+    client:load
+    shopId={membership.shop_id}
+    ownerName={shop?.owner_name ?? user.name ?? ''}
+    ownerEmail={shop?.owner_email ?? user.email ?? ''}
+    ownerFirst={ownerFirst}
+    calendarAlreadyConnected={!!shop?.google_calendar_connected}
+  />
+</Base>

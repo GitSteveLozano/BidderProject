@@ -1,0 +1,48 @@
+---
+import Brief from '@/layouts/Brief.astro';
+import SettingsSections from '@/components/settings/SettingsSections';
+import { client as supabaseService } from '@/lib/supabase';
+
+export const prerender = false;
+Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
+Astro.response.headers.set('cdn-cache-control', 'no-store');
+
+const env = Astro.locals.runtime?.env;
+const user = Astro.locals.user;
+const membership = Astro.locals.membership;
+if (!user || !membership || !env) {
+  return Astro.redirect('/auth/signin?next=/settings');
+}
+
+const svc = supabaseService(env, 'service');
+const { data: shop } = await svc
+  .from('shops')
+  .select('legal_name, trade_name, owner_name, data_state')
+  .eq('id', membership.shop_id)
+  .maybeSingle();
+
+const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
+const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
+---
+
+<Brief
+  title="Settings"
+  active="settings"
+  shopLabel={shopLabel}
+  shopInitial={shopLabel.charAt(0).toUpperCase()}
+  ownerFirst={ownerFirst}
+  ownerRole={membership.role.charAt(0).toUpperCase() + membership.role.slice(1)}
+  dataState={shop?.data_state ?? 'cold-start'}
+>
+  <div class="mb-8">
+    <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1">
+      Account
+    </div>
+    <h1 class="font-serif text-[28px] font-medium leading-tight">Settings</h1>
+    <p class="mt-2 text-sm text-[color:var(--color-muted)]">
+      Signed in as <strong>{user.email}</strong>.
+      <a href="/auth/signout" class="ml-2 underline text-[color:var(--color-accent)] hover:brightness-95">Sign out</a>
+    </p>
+  </div>
+  <SettingsSections client:load />
+</Brief>
