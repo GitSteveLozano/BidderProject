@@ -16,6 +16,8 @@
  */
 import type { APIRoute } from 'astro';
 
+import { extractIntakeMetadata } from '@/lib/intake-metadata';
+
 export const prerender = false;
 
 const MAX_BYTES = 25 * 1024 * 1024; // 25 MB
@@ -90,6 +92,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
   }
 
   const text = (chosen?.text ?? '').trim();
+  const metadata = text.length > 0 ? await extractIntakeMetadata(env, text) : null;
   return json(
     {
       text,
@@ -98,6 +101,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
       file_size: file.size,
       file_type: file.type,
       empty_text: text.length === 0,
+      metadata,
       tried,
     },
     200,

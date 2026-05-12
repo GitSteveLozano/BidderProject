@@ -14,6 +14,8 @@
 import type { APIRoute } from 'astro';
 import { extractText, getDocumentProxy } from 'unpdf';
 
+import { extractIntakeMetadata } from '@/lib/intake-metadata';
+
 export const prerender = false;
 
 const MAX_BYTES = 15 * 1024 * 1024; // 15 MB — covers most spec PDFs
@@ -48,14 +50,19 @@ export const POST: APIRoute = async ({ request, locals }) => {
     );
   }
 
+  const env = locals.runtime?.env;
+  const trimmed = text.trim();
+  const metadata = env ? await extractIntakeMetadata(env, trimmed) : null;
+
   return json(
     {
-      text: text.trim(),
+      text: trimmed,
       page_count: pageCount,
       filename: file.name,
       // Most PDFs that come back empty are scanned images; surface that
       // honestly so the UI can suggest the voice / paste alternative.
-      empty_text: text.trim().length === 0,
+      empty_text: trimmed.length === 0,
+      metadata,
     },
     200,
   );

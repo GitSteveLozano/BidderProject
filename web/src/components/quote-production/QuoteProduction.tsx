@@ -476,6 +476,20 @@ function MethodForm(p: {
   canContinue: () => boolean;
   onContinue: () => void;
 }) {
+  // Apply auto-extracted metadata to the form. Only writes empty
+  // fields — never clobbers what the operator has typed.
+  const applyMetadata = (m: {
+    client_name?: string | null;
+    contact_name?: string | null;
+    project_title?: string | null;
+    project_address?: string | null;
+  } | null) => {
+    if (!m) return;
+    if (m.client_name && !p.clientName().trim()) p.setClientName(m.client_name);
+    if (m.contact_name && !p.clientContact().trim()) p.setClientContact(m.contact_name);
+    if (m.project_title && !p.projectTitle().trim()) p.setProjectTitle(m.project_title);
+    if (m.project_address && !p.projectAddress().trim()) p.setProjectAddress(m.project_address);
+  };
   return (
     <div class="mt-7">
       <button
@@ -503,13 +517,13 @@ function MethodForm(p: {
 
       <Show when={p.method === 'pdf'}>
         <div class="mt-4">
-          <PdfIntake setScopeText={p.setScopeText} />
+          <PdfIntake setScopeText={p.setScopeText} applyMetadata={applyMetadata} />
         </div>
       </Show>
 
       <Show when={p.method === 'voice'}>
         <div class="mt-4">
-          <VoiceIntake setScopeText={p.setScopeText} />
+          <VoiceIntake setScopeText={p.setScopeText} applyMetadata={applyMetadata} />
         </div>
       </Show>
 
@@ -548,7 +562,17 @@ function MethodForm(p: {
   );
 }
 
-function PdfIntake(p: { setScopeText: (v: string) => void }) {
+interface IntakeMetadata {
+  client_name?: string | null;
+  contact_name?: string | null;
+  project_title?: string | null;
+  project_address?: string | null;
+}
+
+function PdfIntake(p: {
+  setScopeText: (v: string) => void;
+  applyMetadata: (m: IntakeMetadata | null) => void;
+}) {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [info, setInfo] = createSignal<{ filename: string; pages: number; chars: number } | null>(null);
@@ -563,12 +587,13 @@ function PdfIntake(p: { setScopeText: (v: string) => void }) {
       fd.append('file', file);
       const resp = await fetch('/api/intake/extract-pdf', { method: 'POST', body: fd });
       if (!resp.ok) throw new Error(await resp.text());
-      const data = await resp.json() as { text: string; page_count: number; empty_text: boolean; filename: string };
+      const data = await resp.json() as { text: string; page_count: number; empty_text: boolean; filename: string; metadata?: IntakeMetadata | null };
       if (data.empty_text) {
         setError('Brief read the PDF but found no selectable text — looks scanned. Try the voice or paste option instead.');
         return;
       }
       p.setScopeText(data.text);
+      p.applyMetadata(data.metadata ?? null);
       setInfo({ filename: data.filename, pages: data.page_count, chars: data.text.length });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -616,67 +641,144 @@ function PdfIntake(p: { setScopeText: (v: string) => void }) {
   );
 }
 
-function VoiceIntake(p: { setScopeText: (v: string) => void }) {
+function VoiceIntake(p: {
+  setScopeText: (v: string) => void;
+  applyMetadata: (m: IntakeMetadata | null) => void;
+}) {
   const [state, setState] = createSignal<'idle' | 'recording' | 'uploading' | 'done'>('idle');
   const [error, setError] = createSignal<string | null>(null);
-  const [info, setInfo] = createSignal<{ duration: number | null; chars: number } | null>(null);
+  const [info, setInfo] = createSignal<{ duration: number | null; chars: number; bytes: number } | null>(null);
   // `elapsed` is the live counter while recording; `recordedSeconds`
   // is the captured value at stop-time so the UI can keep showing
   // it through 'uploading' and 'done' states.
   const [elapsed, setElapsed] = createSignal(0);
   const [recordedSeconds, setRecordedSeconds] = createSignal<number | null>(null);
   let mediaRecorder: MediaRecorder | null = null;
+  let mediaStream: MediaStream | null = null;
   let chunks: BlobPart[] = [];
   let timer: number | null = null;
+
+  const cleanup = () => {
+    if (timer != null) { clearInterval(timer); timer = null; }
+    if (mediaStream) {
+      mediaStream.getTracks().forEach((t) => t.stop());
+      mediaStream = null;
+    }
+    mediaRecorder = null;
+    chunks = [];
+  };
 
   const start = async () => {
     setError(null);
     setInfo(null);
     setRecordedSeconds(null);
+
+    if (typeof MediaRecorder === 'undefined') {
+      setError('MediaRecorder isn\'t available in this browser. Use the file-upload fallback below or paste the scope directly.');
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       chunks = [];
       // Don't force a mimeType — Workers AI Whisper handles webm/opus
       // inconsistently. Letting the browser pick its default produces
       // a more compatible output, and the server-side transcribe path
       // tolerates whatever lands.
-      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder = new MediaRecorder(mediaStream);
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
       };
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunks, { type: mediaRecorder?.mimeType || 'audio/webm' });
-        await transcribe(blob);
+      mediaRecorder.onerror = (e) => {
+        // eslint-disable-next-line no-console
+        console.error('[VoiceIntake] MediaRecorder error', e);
+        setError(`Recorder error: ${(e as any).error?.message ?? 'unknown'}`);
+        setState('idle');
+        cleanup();
       };
-      mediaRecorder.start();
+      mediaRecorder.onstop = async () => {
+        try {
+          const mime = mediaRecorder?.mimeType || 'audio/webm';
+          // eslint-disable-next-line no-console
+          console.log('[VoiceIntake] onstop', { chunks: chunks.length, mime });
+          if (chunks.length === 0) {
+            setError('Recording stopped before any audio data was captured. Try again — record for at least a second or two.');
+            setState('idle');
+            cleanup();
+            return;
+          }
+          const blob = new Blob(chunks, { type: mime });
+          cleanup();
+          await transcribe(blob);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error('[VoiceIntake] onstop failure', err);
+          setError(`Audio processing failed: ${err instanceof Error ? err.message : String(err)}`);
+          setState('idle');
+        }
+      };
+      // 250 ms timeslice so chunks accumulate during the recording
+      // instead of only when stop() fires. If onstop is delayed for any
+      // reason we still have buffered data.
+      mediaRecorder.start(250);
       setState('recording');
       setElapsed(0);
       timer = window.setInterval(() => setElapsed(elapsed() + 1), 1000);
     } catch (err) {
       setError(`Mic access failed: ${err instanceof Error ? err.message : String(err)}`);
+      cleanup();
     }
   };
 
   const stop = () => {
-    if (timer != null) { clearInterval(timer); timer = null; }
     setRecordedSeconds(elapsed());
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    if (timer != null) { clearInterval(timer); timer = null; }
+    if (!mediaRecorder) {
+      setError('Recorder isn\'t initialized — try starting again.');
+      setState('idle');
+      return;
+    }
+    if (mediaRecorder.state === 'inactive') {
+      setError('Recorder was already stopped. If you saw this immediately after pressing record, the mic stream ended early.');
+      setState('idle');
+      return;
+    }
+    try {
+      // Force a final dataavailable before stopping so we don't lose
+      // the trailing buffer.
+      if (typeof mediaRecorder.requestData === 'function') {
+        try { mediaRecorder.requestData(); } catch {}
+      }
       mediaRecorder.stop();
       setState('uploading');
+    } catch (err) {
+      setError(`Couldn't stop the recorder: ${err instanceof Error ? err.message : String(err)}`);
+      setState('idle');
     }
+  };
+
+  // Audio-file fallback for browsers/setups where MediaRecorder is
+  // flaky. User drops an mp3/wav/m4a/webm — same transcribe path.
+  const handleAudioUpload = async (file: File) => {
+    setError(null);
+    setInfo(null);
+    setRecordedSeconds(null);
+    setState('uploading');
+    await transcribe(file);
   };
 
   const transcribe = async (blob: Blob) => {
     try {
       const fd = new FormData();
-      const filename = blob.type.includes('mp4')
-        ? 'recording.m4a'
-        : blob.type.includes('webm')
-          ? 'recording.webm'
-          : blob.type.includes('ogg')
-            ? 'recording.ogg'
-            : 'recording.wav';
+      const filename = blob instanceof File
+        ? blob.name
+        : blob.type.includes('mp4')
+          ? 'recording.m4a'
+          : blob.type.includes('webm')
+            ? 'recording.webm'
+            : blob.type.includes('ogg')
+              ? 'recording.ogg'
+              : 'recording.wav';
       fd.append('file', blob, filename);
       const resp = await fetch('/api/intake/transcribe', { method: 'POST', body: fd });
       const data = await resp.json().catch(() => null) as
@@ -686,7 +788,9 @@ function VoiceIntake(p: { setScopeText: (v: string) => void }) {
             empty_text?: boolean;
             error?: string;
             file_type?: string;
+            file_size?: number;
             tried?: Array<{ model: string; ok: boolean; chars: number; error?: string }>;
+            metadata?: IntakeMetadata | null;
           }
         | null;
       if (!resp.ok) {
@@ -697,15 +801,21 @@ function VoiceIntake(p: { setScopeText: (v: string) => void }) {
           .map((t) => `${t.model.split('/').pop()}: ${t.ok ? `${t.chars} chars` : t.error}`)
           .join(' · ');
         setError(
-          `Captured ${recordedSeconds() ?? '?'}s of audio (${data?.file_type || 'unknown format'}) but ` +
-          `Whisper returned an empty transcript. ${triedSummary ? `Tried — ${triedSummary}.` : ''} ` +
-          `Try again, or paste the scope directly while we sort the codec out.`,
+          `Captured ${recordedSeconds() ?? '?'}s of audio (${data?.file_type || 'unknown format'}, ` +
+          `${data?.file_size ?? '?'} bytes) but Whisper returned an empty transcript. ` +
+          `${triedSummary ? `Tried — ${triedSummary}.` : ''} ` +
+          `Try again, use the file-upload fallback below, or paste the scope directly.`,
         );
         setState('idle');
         return;
       }
       p.setScopeText(data.text);
-      setInfo({ duration: data.duration_seconds ?? null, chars: data.text.length });
+      p.applyMetadata(data.metadata ?? null);
+      setInfo({
+        duration: data.duration_seconds ?? null,
+        chars: data.text.length,
+        bytes: data.file_size ?? blob.size,
+      });
       setState('done');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -789,6 +899,28 @@ function VoiceIntake(p: { setScopeText: (v: string) => void }) {
       </div>
       <Show when={error()}>
         <div class="mt-2 text-xs text-[color:var(--color-danger)]">{error()}</div>
+      </Show>
+      {/* Fallback for browsers/setups where in-page recording is
+          flaky. The operator records on their phone or another tool
+          and drops the file here — same Whisper transcribe path. */}
+      <Show when={state() === 'idle' || state() === 'done'}>
+        <details class="mt-3">
+          <summary class="text-xs text-[color:var(--color-muted)] cursor-pointer hover:text-[color:var(--color-ink)]">
+            Recording not working? Upload an audio file instead.
+          </summary>
+          <label class="block mt-2 rounded-lg border border-dashed border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] px-4 py-3 cursor-pointer hover:border-[color:var(--color-accent)] text-xs">
+            <input
+              type="file"
+              accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg"
+              class="sr-only"
+              onChange={(e) => {
+                const f = e.currentTarget.files?.[0];
+                if (f) handleAudioUpload(f);
+              }}
+            />
+            Drop an audio file (mp3, wav, m4a, webm) or click to choose.
+          </label>
+        </details>
       </Show>
     </div>
   );
