@@ -391,16 +391,25 @@ function ScopeStep(p: {
 }) {
   return (
     <div>
-      <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-        Step 2 · Scope
+      {/* Header — eyebrow + serif H1 + big % readout right-aligned
+          (matches design/mockups/01-agenda-default.png). */}
+      <div class="flex items-start gap-6">
+        <div class="flex-1 min-w-0">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+            Brief is reading the scope
+          </div>
+          <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight tracking-tight">
+            Picking out the line items.
+          </h1>
+        </div>
+        <div class="font-serif text-[36px] font-medium tabular-nums leading-none text-[color:var(--color-ink)]">
+          {Math.round(p.progress())}<span class="text-[18px] text-[color:var(--color-muted)]">%</span>
+        </div>
       </div>
-      <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">
-        Reading the scope.
-      </h1>
 
-      <div class="mt-6 h-1 bg-[color:var(--color-bg-2)] rounded-full overflow-hidden">
+      <div class="mt-4 h-1 bg-[color:var(--color-bg-2)] rounded-full overflow-hidden">
         <div
-          class="h-full bg-[color:var(--color-accent)] transition-all duration-200"
+          class="h-full bg-[color:var(--color-accent)] transition-all duration-300"
           style={{ width: `${p.progress()}%` }}
         />
       </div>
