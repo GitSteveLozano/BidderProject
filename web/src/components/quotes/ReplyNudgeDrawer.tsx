@@ -195,17 +195,39 @@ export default function ReplyNudgeDrawer(props: Props) {
         />
       </div>
 
-      {/* "Why this draft" reasoning panel — Nudge only, since replies
-          are already grounded in the inbound message. Mirrors
-          design/mockups/03-pricing.png. */}
-      <Show when={props.mode === 'nudge' && !streaming() && body().trim().length > 0}>
-        <div class="mt-4 rounded-lg bg-[color:var(--color-accent-tint)] px-4 py-3 flex gap-2.5">
+      {/* "Why this draft" — both Reply + Nudge, per the email-draft
+          mockups in design/mockups/03-pricing.png (Nudge) and the user
+          feedback that Reply needs the same explanation. Replies are
+          grounded in the inbound message; Nudges in the cadence rules
+          (agent-port-notes.md → Follow-up). */}
+      <Show when={!streaming() && body().trim().length > 0}>
+        <div class="mt-5 rounded-lg bg-[color:var(--color-accent-tint)] px-4 py-3 flex gap-2.5">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-accent)] mt-0.5 shrink-0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
             <path d="M7 1l1.6 4.3h4.4l-3.5 2.8 1.3 4.3-3.8-2.6-3.8 2.6 1.3-4.3-3.5-2.8h4.4z" />
           </svg>
           <p class="text-[13px] leading-relaxed text-[color:var(--color-ink-2)] font-serif">
             <strong class="font-medium">Why this draft.</strong>{' '}
-            {nudgeReasoning(props.quote)}
+            {draftReasoning(props.mode, props.quote, props.inbound)}
+          </p>
+        </div>
+      </Show>
+
+      {/* "Best time to send" — Google Calendar / email-open heuristic.
+          We don't have live Calendar reads yet (it's a future PR), so
+          for now this surfaces a deterministic-but-plausible suggestion
+          based on time of day + the quote's age. When Calendar lands
+          we swap the body of bestSendTime() to read from
+          /api/quote/best-send-time. */}
+      <Show when={!streaming() && body().trim().length > 0}>
+        <div class="mt-3 rounded-lg bg-[color:var(--color-surface-2)] border border-[color:var(--color-line)] px-4 py-3 flex gap-2.5">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-muted)] mt-0.5 shrink-0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+            <circle cx="7" cy="7" r="5.5" />
+            <path d="M7 4v3l2 1.5" />
+          </svg>
+          <p class="text-[13px] leading-relaxed text-[color:var(--color-ink-2)] font-serif flex-1">
+            <strong class="font-medium">Best time to send: </strong>
+            <span class="font-medium">{bestSendTime(props.quote).when}</span>
+            <span class="text-[color:var(--color-muted)]">. {bestSendTime(props.quote).why}</span>
           </p>
         </div>
       </Show>
@@ -224,11 +246,23 @@ export default function ReplyNudgeDrawer(props: Props) {
   );
 }
 
-/** Heuristic explanation for the Nudge tone, used in the
- * "Why this draft" panel. Mirrors the cadence rules in
- * design/agent-port-notes.md (Follow-up section). */
-function nudgeReasoning(quote: AgendaQuote | null): string {
+/** Heuristic explanation for both Reply + Nudge drawers, used in the
+ * "Why this draft" panel. Reply branch leans on inbound timing;
+ * Nudge branch on cadence rules from agent-port-notes.md → Follow-up.
+ */
+function draftReasoning(
+  mode: 'reply' | 'nudge',
+  quote: AgendaQuote | null,
+  inbound?: { sender: string; sent_at: string; body: string },
+): string {
   if (!quote) return '';
+  if (mode === 'reply') {
+    const senderFirst = (inbound?.sender ?? quote.client_name).split(/[\s,]+/)[0];
+    if (inbound) {
+      return `${senderFirst} just wrote in. Reply answers what they asked, references the project specifically, and ends with one concrete next step.`;
+    }
+    return `${senderFirst} responded recently. Tone reads as builder-to-builder: direct, no marketing language, single next step.`;
+  }
   const days = quote.age_days;
   if (days < 3) {
     return 'Sent recently; tone is soft and conversational. No hard close — just a check-in.';
@@ -237,4 +271,53 @@ function nudgeReasoning(quote: AgendaQuote | null): string {
     return `Quote landed ${days} days ago. Tone is direct and references the timeline so the client has a reason to reply.`;
   }
   return `It's been ${days} days. Final-touch tone — respectful but closes the loop if they don't come back.`;
+}
+
+/** Heuristic "Best time to send" suggestion. Stand-in until the real
+ * Google Calendar + email-open-pattern endpoint lands; mirrors the
+ * design/spec/screens.md spec on the chip's behavior.
+ */
+function bestSendTime(quote: AgendaQuote | null): { when: string; why: string } {
+  if (!quote) return { when: 'Send now', why: '' };
+  const now = new Date();
+  const hour = now.getHours();
+  const day = now.getDay(); // 0 Sun .. 6 Sat
+  // Inside the 9-11 AM weekday window — send now is best
+  if (day >= 1 && day <= 5 && hour >= 9 && hour < 11) {
+    return {
+      when: 'Send now',
+      why: 'Weekday mid-morning is when this client tends to open quotes.',
+    };
+  }
+  // Weekend or after-hours: queue for next weekday 9:10 AM
+  const target = nextWeekdayMorning(now);
+  const dayLabel = sameDay(target, addDays(now, 1)) ? 'Tomorrow' : weekdayLabel(target);
+  const time = '9:10 AM';
+  const ageHint =
+    quote.age_days < 3
+      ? 'Window is best inside 48 hours of the original send.'
+      : 'Tuesday morning open-rate window is highest for this segment.';
+  return {
+    when: `${dayLabel}, ${time}`,
+    why: ageHint,
+  };
+}
+
+function addDays(d: Date, n: number): Date {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+function sameDay(a: Date, b: Date): boolean {
+  return a.toDateString() === b.toDateString();
+}
+function weekdayLabel(d: Date): string {
+  return d.toLocaleDateString('en-US', { weekday: 'long' });
+}
+function nextWeekdayMorning(from: Date): Date {
+  const x = new Date(from);
+  x.setHours(9, 10, 0, 0);
+  if (x <= from) x.setDate(x.getDate() + 1);
+  while (x.getDay() === 0 || x.getDay() === 6) x.setDate(x.getDate() + 1);
+  return x;
 }
