@@ -77,14 +77,26 @@ const navClass = (key: Props['active']) =>
     <title>{title} · Brief</title>
     <meta name="description" content={description} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    {/* Apply stored theme synchronously before paint — avoids FOWT */}
+    <script is:inline>
+      (function () {
+        try {
+          var t = localStorage.getItem('brief-theme');
+          if (t === 'site' || t === 'paper') {
+            document.documentElement.setAttribute('data-theme', t);
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body
     class="min-h-full bg-[color:var(--color-bg)] text-[color:var(--color-ink)] font-sans"
   >
-    <div class="grid grid-cols-[252px_1fr] h-screen">
-      <!-- Sidebar -->
+    <div class="grid md:grid-cols-[252px_1fr] grid-cols-1 md:h-screen min-h-screen">
+      <!-- Sidebar (collapses to bottom tab bar < md) -->
       <aside
-        class="bg-[color:var(--color-bg-2)] border-r border-[color:var(--color-line)] p-4 flex flex-col gap-3 min-h-0"
+        class="hidden md:flex bg-[color:var(--color-bg-2)] border-r border-[color:var(--color-line)] p-4 flex-col gap-3 min-h-0"
+        aria-label="Primary navigation"
       >
         <div class="flex items-center gap-2.5 px-1 pb-3">
           <div
@@ -173,18 +185,25 @@ const navClass = (key: Props['active']) =>
       </aside>
 
       <!-- Main column -->
-      <div class="flex flex-col min-w-0 overflow-hidden">
+      <div class="flex flex-col min-w-0 md:overflow-hidden">
         <div
-          class="flex items-center gap-3.5 px-10 py-3.5 border-b border-[color:var(--color-line)] bg-[color:var(--color-bg)]"
+          class="flex items-center gap-3.5 px-4 md:px-10 py-3.5 border-b border-[color:var(--color-line)] bg-[color:var(--color-bg)]"
         >
-          <div class="flex items-center gap-2 text-[13px] text-[color:var(--color-muted)]">
-            <span>{shopLabel}</span>
-            <span class="text-[color:var(--color-muted-2)]">/</span>
-            <span class="text-[color:var(--color-ink)] font-medium">{CRUMB[active]}</span>
+          <a
+            href="/"
+            class="md:hidden flex items-center gap-2 mr-2"
+            aria-label="Brief home"
+          >
+            <div class="w-7 h-7 rounded-md bg-[color:var(--color-ink)] text-[color:var(--color-bg)] grid place-items-center font-serif italic font-semibold text-[14px] leading-none">B</div>
+          </a>
+          <div class="flex items-center gap-2 text-[13px] text-[color:var(--color-muted)] min-w-0">
+            <span class="truncate hidden sm:inline">{shopLabel}</span>
+            <span class="text-[color:var(--color-muted-2)] hidden sm:inline">/</span>
+            <span class="text-[color:var(--color-ink)] font-medium truncate">{CRUMB[active]}</span>
           </div>
           <div class="flex-1" />
           <div
-            class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[color:var(--color-surface)] border border-[color:var(--color-line)] w-[320px]"
+            class="hidden md:flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[color:var(--color-surface)] border border-[color:var(--color-line)] w-[320px]"
           >
             <span class="text-[color:var(--color-muted)]" aria-hidden="true">⌕</span>
             <input
@@ -197,11 +216,33 @@ const navClass = (key: Props['active']) =>
           </div>
         </div>
 
-        <main class="flex-1 overflow-auto px-10 py-7">
+        <main class="flex-1 md:overflow-auto px-4 md:px-10 py-7 pb-24 md:pb-7">
           <slot />
         </main>
       </div>
     </div>
+
+    {/* Mobile bottom tab bar */}
+    <nav
+      class="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[color:var(--color-surface)] border-t border-[color:var(--color-line)] flex items-stretch shadow-[var(--shadow-md)]"
+      aria-label="Primary navigation"
+    >
+      <a href="/dashboard" class={`flex-1 flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-mono ${active === 'dashboard' ? 'text-[color:var(--color-accent)]' : 'text-[color:var(--color-muted)]'}`}>
+        <span aria-hidden="true">▣</span><span>Dash</span>
+      </a>
+      <a href="/quotes" class={`flex-1 flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-mono ${active === 'quotes' || active === 'quotedetail' ? 'text-[color:var(--color-accent)]' : 'text-[color:var(--color-muted)]'}`}>
+        <span aria-hidden="true">📄</span><span>Quotes</span>
+      </a>
+      <a href="/generate" class="flex-1 flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-mono text-[color:var(--color-accent-ink)] bg-[color:var(--color-accent)] -my-px font-semibold" aria-label="New quote">
+        <span aria-hidden="true">+</span><span>New</span>
+      </a>
+      <a href="/jobs" class={`flex-1 flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-mono ${active === 'jobs' ? 'text-[color:var(--color-accent)]' : 'text-[color:var(--color-muted)]'}`}>
+        <span aria-hidden="true">⌂</span><span>Jobs</span>
+      </a>
+      <a href="/settings" class={`flex-1 flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-mono ${active === 'settings' ? 'text-[color:var(--color-accent)]' : 'text-[color:var(--color-muted)]'}`}>
+        <span aria-hidden="true">⚙</span><span>More</span>
+      </a>
+    </nav>
   </body>
 </html>
 
