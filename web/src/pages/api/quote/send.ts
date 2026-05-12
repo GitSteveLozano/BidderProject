@@ -65,17 +65,26 @@ export const POST: APIRoute = async ({ request, locals, url }) => {
       deliveryError = 'No email on file for client — marked sent without delivery';
     } else {
       const fromLabel = shop?.trade_name || shop?.legal_name || 'Your contractor';
-      const quoteLink = `${url.origin}/quotes/${quote.id}`;
+      const publicLink = `${url.origin}/q/${quote.id}`;
+      const pixel = `${url.origin}/api/quote/${quote.id}/track-open?from=email`;
+      const totalStr = `$${Number(quote.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
       const result = await sendEmail(env, {
         to: recipientEmail,
         reply_to: shop?.owner_email ?? undefined,
         subject: `Quote for ${quote.project_title} · ${quote.ref}`,
         text:
           `Hi ${client.primary_contact_name ?? recipientEmail},\n\n` +
-          `Here's the quote for ${quote.project_title}. Total: $${Number(quote.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}.\n\n` +
-          `Read it here: ${quoteLink}\n\n` +
+          `Here's the quote for ${quote.project_title}. Total: ${totalStr}.\n\n` +
+          `Read it here: ${publicLink}\n\n` +
           `Reply to this email with any questions.\n\n` +
           `— ${fromLabel}`,
+        html:
+          `<p>Hi ${escapeHtml(client.primary_contact_name ?? recipientEmail)},</p>` +
+          `<p>Here's the quote for <strong>${escapeHtml(quote.project_title)}</strong>. Total: <strong>${totalStr}</strong>.</p>` +
+          `<p><a href="${publicLink}" style="background:#a85432;color:#fffaf2;padding:10px 16px;border-radius:8px;text-decoration:none;display:inline-block;font-family:sans-serif;font-size:14px">Read the quote</a></p>` +
+          `<p>Reply to this email with any questions.</p>` +
+          `<p>— ${escapeHtml(fromLabel)}</p>` +
+          `<img src="${pixel}" width="1" height="1" alt="" style="display:none" />`,
       });
       if (result.ok) {
         delivery = { provider: result.provider, id: result.id };
@@ -110,4 +119,8 @@ function json(payload: unknown, status: number): Response {
     status,
     headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
   });
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!));
 }
