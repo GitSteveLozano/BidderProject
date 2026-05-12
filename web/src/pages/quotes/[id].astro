@@ -2,6 +2,7 @@
 import Brief from '@/layouts/Brief.astro';
 import StatusPill from '@/components/ui/StatusPill';
 import LineItemsTable from '@/components/quotes/LineItemsTable';
+import LogReplyButton from '@/components/quotes/LogReplyButton';
 import { client as supabaseService } from '@/lib/supabase';
 import { fmtCurrencyFull, fmtRelativeDate } from '@/lib/quote-helpers';
 
@@ -152,6 +153,11 @@ const eventLabels: Record<string, string> = {
             </svg>
             {quote.state === 'RESPONDED' ? 'Reply to client' : 'Send reminder'}
           </a>
+          <LogReplyButton
+            client:load
+            quote_id={quote.id}
+            default_subject={`Re: ${quote.project_title}`}
+          />
         </div>
       )}
 
