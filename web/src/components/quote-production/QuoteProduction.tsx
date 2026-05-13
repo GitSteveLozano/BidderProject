@@ -388,6 +388,17 @@ function IntakeStep(p: {
     if (m.project_address && !p.projectAddress().trim()) p.setProjectAddress(m.project_address);
   };
 
+  // What's still keeping the operator from advancing. Surfacing this
+  // next to the disabled button — otherwise it just looks broken when
+  // auto-extraction missed the client / project fields.
+  const missingForScan = (): string[] => {
+    const m: string[] = [];
+    if (!p.clientName().trim()) m.push('client name');
+    if (!p.projectTitle().trim()) m.push('project title');
+    if (p.scopeText().trim().length < 30) m.push('scope');
+    return m;
+  };
+
   return (
     <div>
       <h1 class="font-serif text-[36px] sm:text-[40px] font-medium leading-tight tracking-tight">
@@ -403,7 +414,7 @@ function IntakeStep(p: {
           send. Surface that on the Review step so the operator can
           spot it before hitting send. */}
       <div class="mt-7 grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="Client name">
+        <Field label="Client name" required>
           <Input value={p.clientName()} onInput={(e) => p.setClientName(e.currentTarget.value)} />
         </Field>
         <Field label="Contact name (optional)">
@@ -424,7 +435,7 @@ function IntakeStep(p: {
             placeholder="+1…"
           />
         </Field>
-        <Field label="Project title">
+        <Field label="Project title" required>
           <Input value={p.projectTitle()} onInput={(e) => p.setProjectTitle(e.currentTarget.value)} />
         </Field>
         <Field label="Project address (optional)">
@@ -442,6 +453,7 @@ function IntakeStep(p: {
       <div class="mt-4">
         <Field
           label="Scope"
+          required
           helper="The PDF or recording fills this in. You can also type or paste directly. Brief scans whatever ends up here."
         >
           <textarea
@@ -454,13 +466,24 @@ function IntakeStep(p: {
         </Field>
       </div>
 
-      <div class="mt-6 flex justify-end">
+      <div class="mt-6 flex flex-col items-end gap-2">
+        <Show when={missingForScan().length > 0}>
+          <span class="text-xs text-[color:var(--color-muted)]">
+            Add {formatMissing(missingForScan())} to continue.
+          </span>
+        </Show>
         <Button variant="accent" onClick={p.onContinue} disabled={!p.canContinue()}>
           Scan this scope →
         </Button>
       </div>
     </div>
   );
+}
+
+function formatMissing(items: string[]): string {
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 }
 
 interface IntakeMetadata {
