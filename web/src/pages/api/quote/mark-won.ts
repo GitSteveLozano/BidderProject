@@ -68,13 +68,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 
   const now = new Date();
   const year = now.getUTCFullYear();
-  const { count } = await svc
-    .from('jobs')
-    .select('*', { count: 'exact', head: true })
-    .eq('shop_id', shopId)
-    .gte('created_at', `${year}-01-01T00:00:00Z`);
-  const n = (count ?? 0) + 1;
-  const jobRef = `J-${year}-${String(n).padStart(4, '0')}`;
+  const yearStart = `${year}-01-01T00:00:00Z`;
 
   const jobState: 'SCHEDULED' | 'INPROGRESS' = body.scheduled_start
     ? new Date(body.scheduled_start) <= now
@@ -82,24 +76,50 @@ export const POST: APIRoute = async ({ request, locals }) => {
       : 'SCHEDULED'
     : 'SCHEDULED';
 
-  const { data: job, error: jobErr } = await svc
-    .from('jobs')
-    .insert({
-      shop_id: shopId,
-      quote_id: quote.id,
-      client_id: quote.client_id,
-      ref: jobRef,
-      client_name: quote.client_name,
-      project_title: quote.project_title,
-      state: jobState,
-      scheduled_start: body.scheduled_start ?? null,
-      scheduled_end: body.scheduled_end ?? null,
-      crew_summary: body.crew_summary ?? null,
-      estimated_total: quote.total,
-    })
-    .select('id, ref')
-    .single();
-  if (jobErr || !job) return json({ error: jobErr?.message ?? 'job insert failed' }, 500);
+  // J-YYYY-NNNN per shop+year. Same race as quote refs — two
+  // simultaneous mark-wons in the same shop could compute the same
+  // count. Retry on unique_violation; migration 013 scopes the
+  // constraint to (shop_id, ref) so cross-shop is fine.
+  let job: { id: string; ref: string } | null = null;
+  let jobErr: { message: string; code?: string } | null = null;
+  for (let attempt = 0; attempt < 5 && !job; attempt += 1) {
+    const { count } = await svc
+      .from('jobs')
+      .select('*', { count: 'exact', head: true })
+      .eq('shop_id', shopId)
+      .gte('created_at', yearStart);
+    const n = (count ?? 0) + 1 + attempt;
+    const jobRef = `J-${year}-${String(n).padStart(4, '0')}`;
+    const { data, error } = await svc
+      .from('jobs')
+      .insert({
+        shop_id: shopId,
+        quote_id: quote.id,
+        client_id: quote.client_id,
+        ref: jobRef,
+        client_name: quote.client_name,
+        project_title: quote.project_title,
+        state: jobState,
+        scheduled_start: body.scheduled_start ?? null,
+        scheduled_end: body.scheduled_end ?? null,
+        crew_summary: body.crew_summary ?? null,
+        estimated_total: quote.total,
+      })
+      .select('id, ref')
+      .single();
+    if (!error && data) {
+      job = data;
+      break;
+    }
+    jobErr = error
+      ? { message: error.message, code: (error as { code?: string }).code }
+      : null;
+    const isDup =
+      jobErr?.code === '23505' ||
+      /duplicate key|unique constraint/i.test(jobErr?.message ?? '');
+    if (!isDup) break;
+  }
+  if (!job) return json({ error: jobErr?.message ?? 'job insert failed after retries' }, 500);
 
   await svc
     .from('quotes')

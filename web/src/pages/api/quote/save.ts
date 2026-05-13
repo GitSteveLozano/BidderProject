@@ -137,20 +137,28 @@ export const POST: APIRoute = async ({ request, locals }) => {
     }
   }
 
-  // Ref: if not provided, derive one (Q-YYYY-NNNN by per-shop year sequence)
-  let ref = body.ref;
-  if (!ref) {
-    const year = new Date().getUTCFullYear();
+  // Ref: if not provided, derive one (Q-YYYY-NNNN by per-shop year
+  // sequence). The count-then-insert pattern races when two saves
+  // run concurrently — both compute the same count, both try the
+  // same ref. Migration 013 scopes the UNIQUE constraint to
+  // (shop_id, ref) so cross-shop collisions are impossible; the
+  // retry loop below handles the within-shop race.
+  const year = new Date().getUTCFullYear();
+  const yearStart = `${year}-01-01T00:00:00Z`;
+  const computeNextRef = async (offset: number): Promise<string> => {
     const { count } = await svc
       .from('quotes')
       .select('*', { count: 'exact', head: true })
       .eq('shop_id', shopId)
-      .gte('created_at', `${year}-01-01T00:00:00Z`);
-    const n = (count ?? 0) + 1;
-    ref = `Q-${year}-${String(n).padStart(4, '0')}`;
-  }
+      .gte('created_at', yearStart);
+    const n = (count ?? 0) + 1 + offset;
+    return `Q-${year}-${String(n).padStart(4, '0')}`;
+  };
 
-  const quoteRow = {
+  let ref = body.ref;
+  let refOffset = 0;
+
+  const quoteRow = () => ({
     shop_id: shopId,
     client_id: clientId,
     client_name: body.client_name,
@@ -162,7 +170,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     total: body.total,
     margin_pct: body.margin_pct ?? null,
     state: 'DRAFT' as const,
-    ref,
+    ref: ref!,
     proposal_style: body.proposal_style ?? 'project_quote',
     program_type: body.program_type ?? null,
     term_months: body.term_months ?? null,
@@ -174,13 +182,14 @@ export const POST: APIRoute = async ({ request, locals }) => {
     pricing_structure: body.pricing_structure ?? null,
     tm_rates: body.tm_rates && body.tm_rates.length > 0 ? body.tm_rates : null,
     tm_estimate: body.tm_estimate ?? null,
-  };
+  });
 
   let quoteId: string;
   if (body.id) {
+    if (!ref) ref = await computeNextRef(0);
     const { data, error } = await svc
       .from('quotes')
-      .update(quoteRow)
+      .update(quoteRow())
       .eq('id', body.id)
       .eq('shop_id', shopId)
       .select('id')
@@ -189,13 +198,40 @@ export const POST: APIRoute = async ({ request, locals }) => {
     quoteId = data.id;
     await svc.from('quote_line_items').delete().eq('quote_id', quoteId);
   } else {
-    const { data, error } = await svc
-      .from('quotes')
-      .insert(quoteRow)
-      .select('id')
-      .single();
-    if (error) return json({ error: error.message }, 500);
-    quoteId = data.id;
+    // Insert path. Retry up to 5 times on unique-violation — each
+    // retry bumps the offset so we skip past whichever row landed
+    // first in the race.
+    let inserted: { id: string } | null = null;
+    let lastError: { message: string; code?: string } | null = null;
+    for (let attempt = 0; attempt < 5 && !inserted; attempt += 1) {
+      if (!body.ref) ref = await computeNextRef(refOffset);
+      const { data, error } = await svc
+        .from('quotes')
+        .insert(quoteRow())
+        .select('id')
+        .single();
+      if (!error && data) {
+        inserted = data;
+        break;
+      }
+      lastError = error
+        ? { message: error.message, code: (error as { code?: string }).code }
+        : null;
+      // Postgres unique_violation = '23505'. Supabase also surfaces
+      // the message; match on either.
+      const isDup =
+        lastError?.code === '23505' ||
+        /duplicate key|unique constraint/i.test(lastError?.message ?? '');
+      if (!isDup || body.ref) break; // operator-supplied ref — don't auto-bump
+      refOffset += 1;
+    }
+    if (!inserted) {
+      return json(
+        { error: lastError?.message ?? 'Quote insert failed after retries' },
+        500,
+      );
+    }
+    quoteId = inserted.id;
   }
 
   if (body.line_items.length) {
