@@ -19,6 +19,7 @@
 import type { APIRoute } from 'astro';
 import { client as supabaseService } from '@/lib/supabase';
 import { captureOutcome } from '@/lib/winloss-agent';
+import { runIntelligencePass } from '@/lib/intelligence-agent';
 
 export const prerender = false;
 
@@ -122,6 +123,12 @@ export const POST: APIRoute = async ({ request, locals }) => {
   } catch (e) {
     console.warn('[mark-won] winloss capture failed', e);
   }
+
+  // Intelligence pass: closed outcomes are the trigger for refreshing
+  // findings. Background — never blocks the response.
+  runIntelligencePass(env, svc, shopId).catch((e) => {
+    console.warn('[mark-won] intelligence run failed', e);
+  });
 
   return json({ quote_id: quote.id, job }, 200);
 };

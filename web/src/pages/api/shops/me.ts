@@ -7,6 +7,7 @@
 import type { APIRoute } from 'astro';
 
 import { client as supabaseService } from '@/lib/supabase';
+import { seedFromShop } from '@/lib/context';
 
 export const prerender = false;
 
@@ -71,6 +72,22 @@ export const PATCH: APIRoute = async ({ request, locals }) => {
   }
 
   const svc = supabaseService(env, 'service');
+
+  // Detect first-time onboarding completion — pre-patch row's
+  // onboarding_completed_at is null but the patch sets it. Used below
+  // to kick off the Context seed in the background.
+  const settingOnboardingComplete =
+    'onboarding_completed_at' in patch && patch.onboarding_completed_at != null;
+  let wasOnboardingNull = false;
+  if (settingOnboardingComplete) {
+    const { data: prior } = await svc
+      .from('shops')
+      .select('onboarding_completed_at')
+      .eq('id', locals.membership.shop_id)
+      .maybeSingle();
+    wasOnboardingNull = !prior?.onboarding_completed_at;
+  }
+
   const { data, error } = await svc
     .from('shops')
     .update(patch)
@@ -78,6 +95,16 @@ export const PATCH: APIRoute = async ({ request, locals }) => {
     .select('*')
     .maybeSingle();
   if (error) return json({ error: error.message }, 500);
+
+  // Fire-and-forget: seed Context from the data we now have. The seed
+  // is idempotent (upserts) so this is safe even if it races with a
+  // later manual call.
+  if (env.AI && wasOnboardingNull) {
+    seedFromShop(env, svc, locals.membership.shop_id).catch((e) => {
+      console.warn('[shops.me] background seed failed', e);
+    });
+  }
+
   return json(data, 200);
 };
 

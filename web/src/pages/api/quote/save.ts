@@ -11,6 +11,7 @@
 import type { APIRoute } from 'astro';
 
 import { client as supabaseService } from '@/lib/supabase';
+import { maybeBootstrapShop } from '@/lib/context';
 
 export const prerender = false;
 
@@ -191,6 +192,15 @@ export const POST: APIRoute = async ({ request, locals }) => {
     }));
     const { error: liErr } = await svc.from('quote_line_items').insert(rows);
     if (liErr) return json({ error: liErr.message }, 500);
+  }
+
+  // Lazy bootstrap: if this shop's Context is empty (operator skipped
+  // onboarding's seed trigger), kick it off now with the data we
+  // just persisted. No-ops once chunks exist; best-effort.
+  if (env.AI) {
+    maybeBootstrapShop(env, svc, shopId).catch((e) => {
+      console.warn('[quote.save] context bootstrap failed', e);
+    });
   }
 
   return json({ id: quoteId, ref }, 200);
