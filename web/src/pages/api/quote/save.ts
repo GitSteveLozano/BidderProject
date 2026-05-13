@@ -20,6 +20,8 @@ interface SaveBody {
   client_id?: string;
   client_name: string;
   client_contact_name?: string | null;
+  client_contact_email?: string | null;
+  client_contact_phone?: string | null;
   project_title: string;
   project_address?: string | null;
   scope_summary?: string | null;
@@ -58,17 +60,34 @@ export const POST: APIRoute = async ({ request, locals }) => {
   const shopId = locals.membership.shop_id;
   const svc = supabaseService(env, 'service');
 
-  // Resolve client_id (create if missing)
+  // Resolve client_id. Create a new clients row if no match by name;
+  // otherwise re-use the existing one. When the operator types a new
+  // contact email/phone on a quote for an existing client, only fill
+  // gaps (don't clobber what's already there) — same policy as the
+  // multi-contact form on /clients/[id].
   let clientId = body.client_id;
   if (!clientId) {
     const { data: existing } = await svc
       .from('clients')
-      .select('id')
+      .select('id, primary_contact_name, primary_contact_email, primary_contact_phone')
       .eq('shop_id', shopId)
       .ilike('name', body.client_name)
       .maybeSingle();
     if (existing) {
       clientId = existing.id;
+      const fillPatch: Record<string, string | null> = {};
+      if (!existing.primary_contact_name && body.client_contact_name) {
+        fillPatch.primary_contact_name = body.client_contact_name;
+      }
+      if (!existing.primary_contact_email && body.client_contact_email) {
+        fillPatch.primary_contact_email = body.client_contact_email;
+      }
+      if (!existing.primary_contact_phone && body.client_contact_phone) {
+        fillPatch.primary_contact_phone = body.client_contact_phone;
+      }
+      if (Object.keys(fillPatch).length > 0) {
+        await svc.from('clients').update(fillPatch).eq('id', clientId);
+      }
     } else {
       const { data: created, error: cErr } = await svc
         .from('clients')
@@ -76,6 +95,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
           shop_id: shopId,
           name: body.client_name,
           primary_contact_name: body.client_contact_name ?? null,
+          primary_contact_email: body.client_contact_email ?? null,
+          primary_contact_phone: body.client_contact_phone ?? null,
         })
         .select('id')
         .single();
