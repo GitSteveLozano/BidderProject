@@ -205,7 +205,7 @@ export default function OnboardingFlow(props: Props) {
               <Input
                 value={profile().legal_name}
                 onInput={(e) => update({ legal_name: e.currentTarget.value })}
-                placeholder="L·A Stucco / Halsted & Sons / etc."
+                placeholder="Cedar & Pine Contracting · Northwave Studio · Foundry &amp; Sons"
               />
             </Field>
             <Field label="Your name">
@@ -308,9 +308,9 @@ export default function OnboardingFlow(props: Props) {
           Show Brief one thing you've already written.
         </h1>
         <p class="mt-3 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
-          A past quote, your website, or a few paragraphs you sent a client.
-          Brief reads it to learn your voice — the way you scope, the way you
-          sign off. Skip if you'd rather; we'll learn as you go.
+          A past quote, proposal, retainer, or a few paragraphs you sent a
+          client. Brief reads it to learn your voice — the way you frame work,
+          the way you sign off. Skip if you'd rather; we'll learn as you go.
         </p>
 
         <div class="mt-7 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-6 shadow-[var(--shadow-sm)]">

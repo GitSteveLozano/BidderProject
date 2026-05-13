@@ -354,7 +354,15 @@ function PricingSection(props: { id: string; shop: Shop; saving: boolean; onSave
               onInput={(e) => setForm({ ...form(), default_markup_pct: parseFloat(e.currentTarget.value || '0') })}
             />
           </Field>
-          <Field label="Labor rate $/hr">
+          <Field
+            label={
+              ['agency', 'studio', 'firm', 'practice'].includes(
+                (props.shop.business_noun ?? '').toLowerCase(),
+              )
+                ? 'Hourly rate $/hr'
+                : 'Labor rate $/hr'
+            }
+          >
             <Input
               type="number"
               step="1"
