@@ -1,0 +1,60 @@
+---
+/**
+ * /agents — operator-facing view of Brief's seven agents.
+ *
+ * Read-only inspection + manual triggers. Auto-triggers happen
+ * elsewhere (Follow-up at send time, Win/Loss at outcome, etc.).
+ * This page is for visibility and ad-hoc re-runs.
+ */
+import Brief from '@/layouts/Brief.astro';
+import AgentsPanel from '@/components/agents/AgentsPanel';
+import { client as supabaseService } from '@/lib/supabase';
+
+export const prerender = false;
+Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
+
+const env = Astro.locals.runtime?.env;
+const user = Astro.locals.user;
+const membership = Astro.locals.membership;
+if (!user || !membership || !env) {
+  return Astro.redirect('/auth/signin?next=/agents');
+}
+
+const svc = supabaseService(env, 'service');
+const { data: shop } = await svc
+  .from('shops')
+  .select('legal_name, trade_name, owner_name, data_state')
+  .eq('id', membership.shop_id)
+  .maybeSingle();
+
+const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
+const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
+const role = (membership.role.charAt(0).toUpperCase() + membership.role.slice(1)) as 'Owner' | 'Admin' | 'Member';
+---
+
+<Brief
+  title="Agents"
+  active="agents"
+  shopLabel={shopLabel}
+  shopInitial={shopLabel.charAt(0).toUpperCase()}
+  ownerFirst={ownerFirst}
+  ownerRole={role}
+  dataState={shop?.data_state ?? 'cold-start'}
+>
+  <div class="mb-10">
+    <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1.5">
+      Architecture
+    </div>
+    <h1 class="font-serif text-[36px] font-medium leading-tight tracking-tight">
+      How Brief thinks.
+    </h1>
+    <p class="mt-3 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
+      Seven specialized agents. Each owns one part of the work — reading
+      documents, understanding your company, pricing, writing, learning from
+      outcomes. They share one Context profile so the system gets sharper
+      every time you close a bid.
+    </p>
+  </div>
+
+  <AgentsPanel client:load />
+</Brief>

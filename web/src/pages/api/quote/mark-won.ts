@@ -18,6 +18,7 @@
  */
 import type { APIRoute } from 'astro';
 import { client as supabaseService } from '@/lib/supabase';
+import { captureOutcome } from '@/lib/winloss-agent';
 
 export const prerender = false;
 
@@ -112,6 +113,15 @@ export const POST: APIRoute = async ({ request, locals }) => {
     actor: locals.user.email ?? 'user',
     payload: { job_ref: job.ref, scheduled_start: body.scheduled_start ?? null },
   });
+
+  // Win/Loss agent: snapshot the quote at decision time, infer factors,
+  // write a past_quote_summary chunk back into Context so future
+  // similar scopes retrieve this win. Best-effort.
+  try {
+    await captureOutcome(env, svc, shopId, quote.id, 'won', null);
+  } catch (e) {
+    console.warn('[mark-won] winloss capture failed', e);
+  }
 
   return json({ quote_id: quote.id, job }, 200);
 };

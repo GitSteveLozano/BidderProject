@@ -14,6 +14,12 @@ import Button from '@/components/ui/Button';
 import Field, { Input } from '@/components/ui/Field';
 import Stepper from '@/components/ui/Stepper';
 import Pill from '@/components/ui/Pill';
+import OfferPanel from '@/components/quote-production/OfferPanel';
+import CoverNotePanel from '@/components/quote-production/CoverNotePanel';
+import PhasesEditor, { type Phase } from '@/components/quote-production/PhasesEditor';
+import PhasePricingEditor from '@/components/quote-production/PhasePricingEditor';
+import RfiNotice from '@/components/quote-production/RfiNotice';
+import RfiResponseEditor, { type RfiResponseShape } from '@/components/quote-production/RfiResponseEditor';
 
 interface ShopContext {
   legal_name: string;
@@ -75,6 +81,27 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   const [scanError, setScanError] = createSignal<string | null>(null);
   const [scanning, setScanning] = createSignal(false);
 
+  // Proposal classification (migration 009). Defaults to project_quote
+  // so contractor quotes feel unchanged; scan emits a proposal_style
+  // event early when the doc looks like consulting / partnership / RFI.
+  const [proposalStyle, setProposalStyle] = createSignal<
+    'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown'
+  >('project_quote');
+  const [proposalConfidence, setProposalConfidence] = createSignal(1);
+  const [programType, setProgramType] = createSignal<'one_off' | 'recurring' | 'rebate' | null>(null);
+  const [termMonths, setTermMonths] = createSignal<number | null>(null);
+  const [phases, setPhases] = createSignal<Phase[]>([]);
+  const [rebateTerms, setRebateTerms] = createSignal<Array<{ product: string; rebate: string; basis: string }>>([]);
+  const [rfiRequirements, setRfiRequirements] = createSignal<string[]>([]);
+  const [rfiQuestions, setRfiQuestions] = createSignal<string[]>([]);
+  const [rfiResponse, setRfiResponse] = createSignal<RfiResponseShape>({
+    requirements_answered: [],
+    questions_answered: [],
+    narrative_sections: [],
+    cover_letter: '',
+    submission_format: '',
+  });
+
   // Pricing
   const [markupPct, setMarkupPct] = createSignal<number>(props.shop.default_markup_pct ?? 32);
 
@@ -88,17 +115,35 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
 
   // Derived totals — per-line margin overrides the global. A null
   // margin_pct on a line falls back to the quote-level markupPct.
-  const baseSubtotal = createMemo(() =>
-    lineItems().reduce((s, li) => s + li.subtotal, 0),
-  );
-  const total = createMemo(() =>
+  // Narrative pricing: when there are zero line items but phases with
+  // fees, total = sum of phase fees. baseSubtotal mirrors total in
+  // that case (no margin math — phase fees are fixed-price).
+  const isNarrativeStyle = () =>
+    proposalStyle() === 'consulting' || proposalStyle() === 'partnership';
+  const phasesTotal = createMemo(() =>
     round(
-      lineItems().reduce((s, li) => {
-        const m = li.margin_pct != null ? li.margin_pct : markupPct();
-        return s + li.subtotal * (1 + m / 100);
-      }, 0),
+      phases().reduce((s, ph) => s + (Number(ph.fee) || 0), 0),
       2,
     ),
+  );
+  const useNarrativePricing = createMemo(
+    () => lineItems().length === 0 && phases().length > 0 && isNarrativeStyle(),
+  );
+  const baseSubtotal = createMemo(() =>
+    useNarrativePricing()
+      ? phasesTotal()
+      : lineItems().reduce((s, li) => s + li.subtotal, 0),
+  );
+  const total = createMemo(() =>
+    useNarrativePricing()
+      ? phasesTotal()
+      : round(
+          lineItems().reduce((s, li) => {
+            const m = li.margin_pct != null ? li.margin_pct : markupPct();
+            return s + li.subtotal * (1 + m / 100);
+          }, 0),
+          2,
+        ),
   );
   const marginAmount = createMemo(() => round(total() - baseSubtotal(), 2));
 
@@ -109,6 +154,22 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
     setScanProgress(0);
     setScanError(null);
     setScanning(true);
+    // Reset proposal classification state for each run.
+    setProposalStyle('project_quote');
+    setProposalConfidence(1);
+    setProgramType(null);
+    setTermMonths(null);
+    setPhases([]);
+    setRebateTerms([]);
+    setRfiRequirements([]);
+    setRfiQuestions([]);
+    setRfiResponse({
+      requirements_answered: [],
+      questions_answered: [],
+      narrative_sections: [],
+      cover_letter: '',
+      submission_format: '',
+    });
     try {
       const resp = await fetch('/api/quote/scan', {
         method: 'POST',
@@ -134,7 +195,17 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           if (!dataLine) continue;
           const payload = JSON.parse(dataLine.slice(6));
           if (payload.type === 'progress') setScanProgress(payload.percent);
+          else if (payload.type === 'proposal_style') {
+            setProposalStyle(payload.payload?.style ?? 'project_quote');
+            setProposalConfidence(payload.payload?.confidence ?? 1);
+            setProgramType(payload.payload?.program_type ?? null);
+            setTermMonths(payload.payload?.term_months ?? null);
+          }
           else if (payload.type === 'line_item') setLineItems([...lineItems(), payload.payload]);
+          else if (payload.type === 'phase')     setPhases([...phases(), payload.payload]);
+          else if (payload.type === 'rebate_term') setRebateTerms([...rebateTerms(), payload.payload]);
+          else if (payload.type === 'requirement') setRfiRequirements([...rfiRequirements(), payload.payload?.text ?? '']);
+          else if (payload.type === 'question')    setRfiQuestions([...rfiQuestions(), payload.payload?.text ?? '']);
           else if (payload.type === 'flag')      setFlags([...flags(), payload.payload]);
           else if (payload.type === 'done')      setScopeSummary(payload.payload?.scope_summary ?? '');
           else if (payload.type === 'error')     setScanError(payload.message);
@@ -144,6 +215,19 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
       setScanError(err instanceof Error ? err.message : String(err));
     } finally {
       setScanning(false);
+      // After the scan settles, if the classifier says this is an
+      // inbound RFI, seed the response shells from the buyer's
+      // detected requirements + questions. Operator-edited values are
+      // preserved on re-scan because we only seed when shells are empty.
+      if (proposalStyle() === 'rfi_received' && rfiResponse().requirements_answered.length === 0) {
+        setRfiResponse({
+          requirements_answered: rfiRequirements().map((r) => ({ requirement: r, response: '' })),
+          questions_answered: rfiQuestions().map((q) => ({ question: q, answer: '' })),
+          narrative_sections: [],
+          cover_letter: '',
+          submission_format: '',
+        });
+      }
     }
   };
 
@@ -245,6 +329,11 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           total: total(),
           margin_pct: markupPct(),
           line_items: lineItems(),
+          proposal_style: proposalStyle(),
+          program_type: programType(),
+          term_months: termMonths(),
+          phases: phases().length > 0 ? phases() : null,
+          rfi_response: proposalStyle() === 'rfi_received' ? rfiResponse() : null,
         }),
       });
       if (!saveResp.ok) throw new Error(`Save failed: ${await saveResp.text()}`);
@@ -303,6 +392,14 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           lineItems={lineItems}
           flags={flags}
           scopeSummary={scopeSummary}
+          proposalStyle={proposalStyle}
+          proposalConfidence={proposalConfidence}
+          phases={phases}
+          setPhases={setPhases}
+          rebateTerms={rebateTerms}
+          rfiRequirements={rfiRequirements}
+          rfiQuestions={rfiQuestions}
+          termMonths={termMonths}
           onRetry={startScan}
           onBack={() => setStepIdx(0)}
           onContinue={() => setStepIdx(2)}
@@ -310,20 +407,42 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
       </Show>
 
       <Show when={stepId() === 'pricing'}>
-        <PricingStep
-          shop={props.shop}
-          lineItems={lineItems}
-          markupPct={markupPct}
-          setMarkupPct={setMarkupPct}
-          baseSubtotal={baseSubtotal}
-          marginAmount={marginAmount}
-          total={total}
-          updateLineItem={updateLineItem}
-          removeLineItem={removeLineItem}
-          addLineItem={addLineItem}
-          onBack={() => setStepIdx(1)}
-          onContinue={goToReview}
-        />
+        <Show
+          when={proposalStyle() === 'rfi_received'}
+          fallback={
+            <PricingStep
+              shop={props.shop}
+              lineItems={lineItems}
+              scopeSummary={scopeSummary}
+              markupPct={markupPct}
+              setMarkupPct={setMarkupPct}
+              baseSubtotal={baseSubtotal}
+              marginAmount={marginAmount}
+              total={total}
+              updateLineItem={updateLineItem}
+              removeLineItem={removeLineItem}
+              addLineItem={addLineItem}
+              proposalStyle={proposalStyle}
+              phases={phases}
+              setPhases={setPhases}
+              narrativePricing={useNarrativePricing}
+              onBack={() => setStepIdx(1)}
+              onContinue={goToReview}
+            />
+          }
+        >
+          <RfiStep
+            requirements={rfiRequirements}
+            questions={rfiQuestions}
+            response={rfiResponse}
+            setResponse={setRfiResponse}
+            scopeSummary={scopeSummary}
+            clientName={clientName}
+            projectTitle={projectTitle}
+            onBack={() => setStepIdx(1)}
+            onContinue={goToReview}
+          />
+        </Show>
       </Show>
 
       <Show when={stepId() === 'review'}>
@@ -335,6 +454,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           marginAmount={marginAmount}
           markupPct={markupPct}
           lineItems={lineItems}
+          scopeSummary={scopeSummary}
           clientName={clientName}
           clientContact={clientContact}
           setClientContact={setClientContact}
@@ -892,21 +1012,69 @@ function ScopeStep(p: {
   lineItems: () => LineItem[];
   flags: () => Flag[];
   scopeSummary: () => string;
+  proposalStyle: () => 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown';
+  proposalConfidence: () => number;
+  phases: () => Phase[];
+  setPhases: (p: Phase[]) => void;
+  rebateTerms: () => Array<{ product: string; rebate: string; basis: string }>;
+  rfiRequirements: () => string[];
+  rfiQuestions: () => string[];
+  termMonths: () => number | null;
   onRetry: () => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
+  const styleLabel = () => {
+    switch (p.proposalStyle()) {
+      case 'partnership':
+        return 'Partnership pitch';
+      case 'consulting':
+        return 'Consulting proposal';
+      case 'rfi_received':
+        return 'Inbound RFI';
+      case 'unknown':
+        return 'Unknown style';
+      default:
+        return 'Project quote';
+    }
+  };
+  const isNarrative = () =>
+    p.proposalStyle() === 'consulting' || p.proposalStyle() === 'partnership';
+
+  const updatePhase = (idx: number, patch: Partial<Phase>) => {
+    const next = p.phases().slice();
+    next[idx] = { ...next[idx], ...patch };
+    p.setPhases(next);
+  };
+  const addPhase = () => {
+    p.setPhases([...p.phases(), { name: '', deliverables: [], duration: null }]);
+  };
+  const removePhase = (idx: number) => {
+    p.setPhases(p.phases().filter((_, i) => i !== idx));
+  };
+
   return (
     <div>
       {/* Header — eyebrow + serif H1 + big % readout right-aligned
           (matches design/mockups/01-agenda-default.png). */}
       <div class="flex items-start gap-6">
         <div class="flex-1 min-w-0">
-          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-            Brief is reading the scope
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] flex items-center gap-2">
+            <span>Brief is reading the scope</span>
+            <Show when={!p.scanning() && p.proposalStyle() !== 'project_quote'}>
+              <span class="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm bg-[color:var(--color-accent-tint,#fbe9d4)] text-[color:var(--color-accent,#a85432)] text-[10.5px] font-medium uppercase">
+                Detected: {styleLabel()}
+              </span>
+            </Show>
           </div>
           <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight tracking-tight">
-            Picking out the line items.
+            {p.proposalStyle() === 'consulting'
+              ? 'Mapping out the phases.'
+              : p.proposalStyle() === 'partnership'
+                ? 'Pulling the rebate terms.'
+                : p.proposalStyle() === 'rfi_received'
+                  ? 'Reading what they’re asking for.'
+                  : 'Picking out the line items.'}
           </h1>
         </div>
         <div class="font-serif text-[36px] font-medium tabular-nums leading-none text-[color:var(--color-ink)]">
@@ -937,6 +1105,17 @@ function ScopeStep(p: {
         <ScanTaskList progress={p.progress} lineItemCount={() => p.lineItems().length} />
       </Show>
 
+      <Show when={!p.scanning() && p.proposalStyle() === 'rfi_received'}>
+        <div class="mt-6">
+          <RfiNotice
+            confidence={p.proposalConfidence}
+            requirements={p.rfiRequirements}
+            questions={p.rfiQuestions}
+            onBack={p.onBack}
+          />
+        </div>
+      </Show>
+
       <Show when={p.flags().length > 0}>
         <div class="mt-6 space-y-2">
           <For each={p.flags()}>
@@ -953,6 +1132,43 @@ function ScopeStep(p: {
               </div>
             )}
           </For>
+        </div>
+      </Show>
+
+      <Show when={!p.scanning() && (isNarrative() || p.phases().length > 0)}>
+        <div class="mt-6">
+          <PhasesEditor
+            phases={p.phases}
+            onUpdate={updatePhase}
+            onAdd={addPhase}
+            onRemove={removePhase}
+          />
+        </div>
+      </Show>
+
+      <Show when={!p.scanning() && p.proposalStyle() === 'partnership' && p.rebateTerms().length > 0}>
+        <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
+          <div class="px-4 py-3 border-b border-[color:var(--color-line)] flex justify-between items-baseline">
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
+              Rebate terms
+            </div>
+            <Show when={p.termMonths()}>
+              <span class="text-[11px] font-mono text-[color:var(--color-muted-2)]">
+                {p.termMonths()} month term
+              </span>
+            </Show>
+          </div>
+          <ul class="divide-y divide-[color:var(--color-line)]">
+            <For each={p.rebateTerms()}>
+              {(rt) => (
+                <li class="px-4 py-3 grid grid-cols-[1fr_120px_1fr] gap-3 text-sm">
+                  <div class="font-medium">{rt.product}</div>
+                  <div class="font-mono tabular-nums text-right">{rt.rebate}</div>
+                  <div class="text-[color:var(--color-muted)] text-[12.5px]">{rt.basis}</div>
+                </li>
+              )}
+            </For>
+          </ul>
         </div>
       </Show>
 
@@ -994,12 +1210,16 @@ function ScopeStep(p: {
       <div class="mt-6 flex items-center justify-between">
         <Button variant="ghost" onClick={p.onBack}>← Back</Button>
         {/* Gated only on the scan still running. Zero-item scans
-            still let the operator advance — Pricing step has an
-            "Add line" UI that can recover from a thin extract. */}
+            still let the operator advance — Pricing step (or the
+            phases editor) can recover from a thin extract. */}
         <Button variant="accent" disabled={p.scanning()} onClick={p.onContinue}>
-          {p.lineItems().length === 0 && !p.scanning()
-            ? 'Continue (add lines manually) →'
-            : 'Continue to pricing →'}
+          {p.scanning()
+            ? 'Scanning…'
+            : p.lineItems().length === 0 && p.phases().length === 0
+              ? 'Continue (add detail manually) →'
+              : isNarrative()
+                ? 'Continue to pricing →'
+                : 'Continue to pricing →'}
         </Button>
       </div>
     </div>
@@ -1009,6 +1229,7 @@ function ScopeStep(p: {
 function PricingStep(p: {
   shop: ShopContext;
   lineItems: () => LineItem[];
+  scopeSummary: () => string;
   markupPct: () => number;
   setMarkupPct: (v: number) => void;
   baseSubtotal: () => number;
@@ -1017,19 +1238,32 @@ function PricingStep(p: {
   updateLineItem: (idx: number, patch: Partial<LineItem>) => void;
   removeLineItem: (idx: number) => void;
   addLineItem: () => void;
+  proposalStyle: () => 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown';
+  phases: () => Phase[];
+  setPhases: (p: Phase[]) => void;
+  narrativePricing: () => boolean;
   onBack: () => void;
   onContinue: () => void;
 }) {
+  const updatePhase = (idx: number, patch: Partial<Phase>) => {
+    const next = p.phases().slice();
+    next[idx] = { ...next[idx], ...patch };
+    p.setPhases(next);
+  };
+
   return (
     <div>
       <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
         Step 3 · Pricing
       </div>
       <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">
-        Confirm the numbers.
+        {p.narrativePricing() ? 'Price each phase.' : 'Confirm the numbers.'}
       </h1>
 
-      <div class="mt-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+      <Show
+        when={p.narrativePricing()}
+        fallback={
+      <div class="mt-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-x-auto">
           <div class="grid grid-cols-[3fr_60px_70px_90px_70px_100px_36px] min-w-[720px] px-4 py-3 border-b border-[color:var(--color-line)] text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
             <div>Description</div>
@@ -1107,6 +1341,7 @@ function PricingStep(p: {
           </div>
         </div>
 
+        <div class="space-y-4">
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
           <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
             Default margin
@@ -1145,11 +1380,131 @@ function PricingStep(p: {
             </div>
           </div>
         </div>
+
+        <OfferPanel
+          scopeSummary={p.scopeSummary}
+          lineItems={() =>
+            p.lineItems().map((li) => ({
+              description: li.description,
+              qty: li.qty,
+              unit: li.unit ?? 'lump_sum',
+            }))
+          }
+          currentBaseSubtotal={p.baseSubtotal}
+          onApplyMargin={(pct) => p.setMarkupPct(pct)}
+        />
+        </div>
+      </div>
+        }
+      >
+        <div class="mt-6">
+          <PhasePricingEditor
+            phases={p.phases}
+            onUpdate={updatePhase}
+            total={p.total}
+          />
+          <p class="mt-3 text-[12.5px] font-serif italic text-[color:var(--color-muted)] leading-relaxed">
+            Phase fees are fixed-price — no margin slider. Add or rename
+            phases on the Scope step.
+          </p>
+        </div>
+      </Show>
+
+      <div class="mt-6 flex items-center justify-between">
+        <Button variant="ghost" onClick={p.onBack}>← Back</Button>
+        <Button
+          variant="accent"
+          disabled={
+            p.narrativePricing()
+              ? p.phases().length === 0 || p.total() <= 0
+              : p.lineItems().length === 0
+          }
+          onClick={p.onContinue}
+        >
+          Continue to review →
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function RfiStep(p: {
+  requirements: () => string[];
+  questions: () => string[];
+  response: () => RfiResponseShape;
+  setResponse: (next: RfiResponseShape) => void;
+  scopeSummary: () => string;
+  clientName: () => string;
+  projectTitle: () => string;
+  onBack: () => void;
+  onContinue: () => void;
+}) {
+  // Asks Composition for a voice-matched body for one narrative
+  // section. Inline mode — no quote_id needed, runs against Context.
+  const draftSection = async (heading: string, prompt: string): Promise<string> => {
+    const r = await fetch('/api/composition/draft', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'rfi_section',
+        scope_summary:
+          (p.scopeSummary() || '') +
+          (heading ? `\nSection: ${heading}` : '') +
+          (prompt ? `\nOperator notes: ${prompt}` : ''),
+        client_name: p.clientName(),
+        project_title: p.projectTitle(),
+        classification: 'rfi_received',
+      }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const json = (await r.json()) as { text?: string };
+    return json.text ?? '';
+  };
+
+  const answeredCount = () =>
+    p.response().requirements_answered.filter((r) => r.response.trim()).length +
+    p.response().questions_answered.filter((q) => q.answer.trim()).length +
+    (p.response().cover_letter.trim() ? 1 : 0);
+  const totalToAnswer = () =>
+    p.response().requirements_answered.length +
+    p.response().questions_answered.length +
+    1;
+  const ready = () => answeredCount() >= Math.max(2, Math.ceil(totalToAnswer() / 2));
+
+  return (
+    <div>
+      <div class="flex items-start gap-6">
+        <div class="flex-1 min-w-0">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+            Step 3 · Response
+          </div>
+          <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">
+            Answer the buyer.
+          </h1>
+        </div>
+        <div class="text-right">
+          <div class="font-serif text-[28px] tabular-nums leading-none">
+            {answeredCount()}<span class="text-[14px] text-[color:var(--color-muted)]">/{totalToAnswer()}</span>
+          </div>
+          <div class="text-[11px] font-mono uppercase text-[color:var(--color-muted-2)] mt-0.5">
+            sections drafted
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-6">
+        <RfiResponseEditor
+          requirements={p.requirements}
+          questions={p.questions}
+          response={p.response}
+          setResponse={p.setResponse}
+          draftSection={draftSection}
+        />
       </div>
 
       <div class="mt-6 flex items-center justify-between">
         <Button variant="ghost" onClick={p.onBack}>← Back</Button>
-        <Button variant="accent" disabled={p.lineItems().length === 0} onClick={p.onContinue}>
+        <Button variant="accent" disabled={!ready()} onClick={p.onContinue}>
           Continue to review →
         </Button>
       </div>
@@ -1165,6 +1520,7 @@ function ReviewStep(p: {
   marginAmount: () => number;
   markupPct: () => number;
   lineItems: () => LineItem[];
+  scopeSummary: () => string;
   clientName: () => string;
   clientContact: () => string;
   setClientContact: (v: string) => void;
@@ -1380,6 +1736,14 @@ function ReviewStep(p: {
               </For>
             </ul>
           </div>
+
+          <CoverNotePanel
+            scopeSummary={p.scopeSummary}
+            clientName={p.clientName}
+            contactName={p.clientContact}
+            projectTitle={p.projectTitle}
+            total={p.total}
+          />
 
           {/* Letterhead snippet */}
           <div class="rounded-xl bg-[color:var(--color-surface-2)] px-4 py-3 text-[12px] text-[color:var(--color-muted)] leading-relaxed font-serif">

@@ -15,6 +15,7 @@ import type { APIRoute } from 'astro';
 
 import { client as supabaseService } from '@/lib/supabase';
 import { sendEmail } from '@/lib/delivery';
+import { scheduleForQuote } from '@/lib/followup-agent';
 
 export const prerender = false;
 
@@ -147,8 +148,25 @@ export const POST: APIRoute = async ({ request, locals, url }) => {
     },
   });
 
+  // Follow-up agent: schedule the three post-send touches (check-in,
+  // nudge, last-call) keyed off sent_at + the shop's winning cadence.
+  // Best-effort — never blocks the send response.
+  let followups: { scheduled: number } | null = null;
+  try {
+    followups = await scheduleForQuote(svc, shopId, quote.id);
+  } catch (e) {
+    console.warn('[send] follow-up scheduling failed', e);
+  }
+
   return json(
-    { id: quote.id, ref: quote.ref, sent_at: sentAt, delivery, delivery_error: deliveryError },
+    {
+      id: quote.id,
+      ref: quote.ref,
+      sent_at: sentAt,
+      delivery,
+      delivery_error: deliveryError,
+      followups_scheduled: followups?.scheduled ?? 0,
+    },
     200,
   );
 };
