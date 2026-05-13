@@ -43,6 +43,8 @@ preamble, no closing.
 {
   "proposal_style": "project_quote" | "partnership" | "consulting" | "rfi_received" | "unknown",
   "confidence": 0-1 (your honest read),
+  "offer_kind": "quote" | "bid" | "proposal" | "contract",
+  "pricing_structure": "fixed_price" | "itemized" | "phase_priced" | "time_and_materials" | "rebate_program",
   "program_type": "one_off" | "recurring" | "rebate" | null,
   "term_months": number | null,
   "scope_summary": "1-2 sentence plain-English summary",
@@ -97,6 +99,31 @@ Style guide — pick exactly one for proposal_style:
   fabricate line_items or rebate_terms.
 
 - "unknown": confidence too low to commit.
+
+Offer kind — classify the doc's commitment shape:
+- "quote": informal price for a defined scope. Default for contractor
+  itemized docs.
+- "bid": competitive submission, usually in response to an RFP/RFI or
+  a procurement process. Often binding. Default when responding to
+  an RFI.
+- "proposal": detailed solution + value, usually open-ended until
+  accepted. Default for partnership pitches + consulting decks.
+- "contract": binding agreement with explicit acceptance language /
+  signature blocks. Only when the doc clearly carries contractual
+  terms (Master Services Agreement, signed-on-acceptance language).
+
+Pricing structure — how the price is constructed:
+- "itemized": discrete line items with qty × unit price. Use for
+  contractor scopes with materials + labor breakdowns.
+- "phase_priced": fixed fee per phase. Use for consulting / project-
+  based engagements.
+- "fixed_price": single total for the engagement. Use when the doc
+  proposes one number with no breakdown (sales proposals, simple
+  retainers).
+- "time_and_materials": hourly rates × estimated hours + materials.
+  Use when the doc mentions hourly billing or unknown scope.
+- "rebate_program": % or per-unit rebates on supplier products.
+  Use for partnership pitches.
 
 Rules:
 - Pull only what's in the source. Do not invent items, phases, or
@@ -165,6 +192,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
         const parsed = extractJson<{
           proposal_style?: string;
           confidence?: number;
+          offer_kind?: string;
+          pricing_structure?: string;
           program_type?: string;
           term_months?: number;
           scope_summary?: string;
@@ -194,6 +223,11 @@ export const POST: APIRoute = async ({ request, locals }) => {
         const proposal_style = normalizeStyle(parsed?.proposal_style);
         const confidence =
           typeof parsed?.confidence === 'number' ? clamp01(parsed.confidence) : 0.5;
+        const offer_kind = normalizeOfferKind(parsed?.offer_kind, proposal_style);
+        const pricing_structure = normalizePricingStructure(
+          parsed?.pricing_structure,
+          proposal_style,
+        );
         const program_type = normalizeProgramType(parsed?.program_type);
         const term_months =
           typeof parsed?.term_months === 'number' ? parsed.term_months : null;
@@ -204,7 +238,14 @@ export const POST: APIRoute = async ({ request, locals }) => {
         // before line items / phases start arriving.
         emit({
           type: 'proposal_style',
-          payload: { style: proposal_style, confidence, program_type, term_months },
+          payload: {
+            style: proposal_style,
+            confidence,
+            program_type,
+            term_months,
+            offer_kind,
+            pricing_structure,
+          },
         });
 
         const line_items = Array.isArray(parsed?.line_items) ? parsed!.line_items : [];
@@ -285,6 +326,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
           payload: {
             proposal_style,
             confidence,
+            offer_kind,
+            pricing_structure,
             program_type,
             term_months,
             scope_summary,
@@ -328,6 +371,53 @@ function normalizeStyle(
 
 function normalizeProgramType(v: unknown): 'one_off' | 'recurring' | 'rebate' | null {
   return v === 'one_off' || v === 'recurring' || v === 'rebate' ? v : null;
+}
+
+/** Offer kind — Quote / Bid / Proposal / Contract. When the model
+ * omits it, default by proposal_style. */
+function normalizeOfferKind(
+  v: unknown,
+  style: 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown',
+): 'quote' | 'bid' | 'proposal' | 'contract' {
+  if (v === 'quote' || v === 'bid' || v === 'proposal' || v === 'contract') return v;
+  switch (style) {
+    case 'partnership':
+    case 'consulting':
+      return 'proposal';
+    case 'rfi_received':
+      return 'bid';
+    case 'unknown':
+      return 'proposal';
+    default:
+      return 'quote';
+  }
+}
+
+/** Pricing structure — how the dollar/value is constructed. When
+ * the model omits it, default by proposal_style. */
+function normalizePricingStructure(
+  v: unknown,
+  style: 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown',
+): 'fixed_price' | 'itemized' | 'phase_priced' | 'time_and_materials' | 'rebate_program' {
+  if (
+    v === 'fixed_price' ||
+    v === 'itemized' ||
+    v === 'phase_priced' ||
+    v === 'time_and_materials' ||
+    v === 'rebate_program'
+  )
+    return v;
+  switch (style) {
+    case 'partnership':
+      return 'rebate_program';
+    case 'consulting':
+      return 'phase_priced';
+    case 'rfi_received':
+    case 'unknown':
+      return 'fixed_price';
+    default:
+      return 'itemized';
+  }
 }
 
 function clamp01(n: number): number {

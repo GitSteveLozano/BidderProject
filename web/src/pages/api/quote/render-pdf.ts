@@ -57,6 +57,17 @@ interface SectionData {
   rows?: Array<Record<string, string>>;
 }
 
+interface TmRate {
+  role: string;
+  rate: number;
+}
+
+interface TmEstimate {
+  hours_low: number;
+  hours_high: number;
+  materials: number;
+}
+
 interface BidBody {
   ref?: string;
   date?: string;
@@ -79,6 +90,20 @@ interface BidBody {
   proposal_style?: 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'novel' | 'unknown' | null;
   program_type?: 'one_off' | 'recurring' | 'rebate' | null;
   term_months?: number | null;
+  /** Offer axes — migration 012. offer_kind drives the header label
+   * (QUOTE / BID / PROPOSAL / CONTRACT). T&M and fixed_price are
+   * separate sections renderBody emits when populated. */
+  offer_kind?: 'quote' | 'bid' | 'proposal' | 'contract' | null;
+  pricing_structure?:
+    | 'fixed_price'
+    | 'itemized'
+    | 'phase_priced'
+    | 'time_and_materials'
+    | 'rebate_program'
+    | null;
+  tm_rates?: TmRate[] | null;
+  tm_estimate?: TmEstimate | null;
+  fixed_price_description?: string | null;
   total: number;
   shop?: {
     legal_name?: string;
@@ -258,6 +283,67 @@ function renderBody(b: BidBody): string {
       </table>`);
   }
 
+  // Fixed-price engagement — single description + total, rendered
+  // as a clean prose block (not a table) so it reads like an offer
+  // letter, not an invoice.
+  if (
+    b.pricing_structure === 'fixed_price' &&
+    b.fixed_price_description &&
+    b.total > 0
+  ) {
+    sections.push(`
+      <h2>Engagement</h2>
+      <p class="scope-body" style="white-space:pre-wrap">${esc(b.fixed_price_description)}</p>
+      <div class="totals" style="margin-top:0">
+        <span class="total-label">Fee</span>
+        <span class="total-value">${fmt(b.total)}</span>
+      </div>`);
+  }
+
+  // Time & materials — rate card table + estimate band note.
+  if (
+    b.pricing_structure === 'time_and_materials' &&
+    b.tm_rates &&
+    b.tm_rates.length > 0
+  ) {
+    const rows = b.tm_rates
+      .filter((r) => r.role && r.rate > 0)
+      .map(
+        (r) => `
+          <tr>
+            <td>${esc(r.role)}</td>
+            <td class="num">${esc(fmt(r.rate))} / hr</td>
+          </tr>`,
+      )
+      .join('');
+    const e = b.tm_estimate ?? { hours_low: 0, hours_high: 0, materials: 0 };
+    const avg = b.tm_rates.filter((r) => r.rate > 0);
+    const avgRate = avg.length > 0 ? avg.reduce((s, r) => s + r.rate, 0) / avg.length : 0;
+    const lowEst = Math.round(avgRate * e.hours_low + (e.materials || 0));
+    const highEst = Math.round(avgRate * e.hours_high + (e.materials || 0));
+    const estBand =
+      e.hours_high > 0
+        ? `<p class="scope-body" style="margin-top:12px">
+             <strong>Estimate band:</strong> ${fmt(lowEst)} – ${fmt(highEst)}
+             (${e.hours_low}–${e.hours_high} hrs${e.materials ? ` + ${fmt(e.materials)} materials` : ''}).
+             T&amp;M billing — actuals invoiced against logged hours.
+             Estimate is planning only.
+           </p>`
+        : '';
+    sections.push(`
+      <h2>Rates &amp; estimate</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th class="num">Rate</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${estBand}`);
+  }
+
   if (b.line_items && b.line_items.length > 0) {
     const rows = b.line_items
       .map(
@@ -300,9 +386,30 @@ function renderBody(b: BidBody): string {
 /** Hide the bottom "Total: $X" line when the doc legitimately has no
  * total (rebate-only partnership, narrative consulting with no fees,
  * novel layouts with zero $). Project quotes always show it. */
+/** Header label for the offer kind. Defaults to 'Quote' for backward
+ * compat when the row doesn't carry an offer_kind. */
+function offerKindLabel(kind: BidBody['offer_kind']): string {
+  switch (kind) {
+    case 'bid':
+      return 'Bid';
+    case 'proposal':
+      return 'Proposal';
+    case 'contract':
+      return 'Contract';
+    case 'quote':
+    default:
+      return 'Quote';
+  }
+}
+
 function shouldShowTotal(b: BidBody): boolean {
+  // Fixed-price renders its own "Fee" line inside the engagement
+  // section; T&M renders its own estimate band. Showing the bottom
+  // Total: $X for those would duplicate.
+  if (b.pricing_structure === 'fixed_price') return false;
+  if (b.pricing_structure === 'time_and_materials') return false;
   if (b.total > 0) return true;
-  // total === 0
+  // total === 0 — only show the bottom Total for project quotes.
   if (b.proposal_style === 'project_quote' || b.proposal_style == null) return true;
   return false;
 }
@@ -462,7 +569,7 @@ function renderBid(b: BidBody): string {
         <div class="shop-meta">${[shop.license_number, shop.license_jurisdiction].filter(Boolean).map(esc).join(' · ')}</div>
         <div class="ref-row">
           <span><span class="label">Date:</span> <span>${esc(date)}</span></span>
-          <span><span class="label">Quote:</span> <span class="value">${esc(ref)}</span></span>
+          <span><span class="label">${esc(offerKindLabel(b.offer_kind))}:</span> <span class="value">${esc(ref)}</span></span>
         </div>
       </header>
 

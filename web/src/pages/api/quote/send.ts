@@ -41,7 +41,7 @@ export const POST: APIRoute = async ({ request, locals, url }) => {
 
   const { data: quote, error } = await svc
     .from('quotes')
-    .select('id, state, client_name, client_id, ref, project_title, total')
+    .select('id, state, client_name, client_id, ref, project_title, total, offer_kind')
     .eq('id', body.quote_id)
     .eq('shop_id', shopId)
     .maybeSingle();
@@ -106,7 +106,7 @@ export const POST: APIRoute = async ({ request, locals, url }) => {
         to,
         cc: cc.length > 0 ? cc : undefined,
         reply_to: shop?.owner_email ?? undefined,
-        subject: `Quote for ${quote.project_title} · ${quote.ref}`,
+        subject: `${offerSubjectLabel(quote.offer_kind)} for ${quote.project_title} · ${quote.ref}`,
         text:
           `${greetingName ? `Hi ${greetingName},\n\n` : 'Hello,\n\n'}` +
           `Here's the quote for ${quote.project_title}. Total: ${totalStr}.\n\n` +
@@ -176,6 +176,22 @@ function json(payload: unknown, status: number): Response {
     status,
     headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
   });
+}
+
+/** Email-subject prefix for the offer kind. Defaults to 'Quote' for
+ * older rows that pre-date migration 012. */
+function offerSubjectLabel(kind: string | null | undefined): string {
+  switch (kind) {
+    case 'bid':
+      return 'Bid';
+    case 'proposal':
+      return 'Proposal';
+    case 'contract':
+      return 'Contract';
+    case 'quote':
+    default:
+      return 'Quote';
+  }
 }
 
 function escapeHtml(s: string): string {

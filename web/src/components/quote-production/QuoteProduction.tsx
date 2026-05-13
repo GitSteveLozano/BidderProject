@@ -22,6 +22,16 @@ import RfiNotice from '@/components/quote-production/RfiNotice';
 import RfiResponseEditor, { type RfiResponseShape } from '@/components/quote-production/RfiResponseEditor';
 import NovelShapeConfirmCard from '@/components/quote-production/NovelShapeConfirmCard';
 import FreeformEditor from '@/components/quote-production/FreeformEditor';
+import FixedPriceEditor from '@/components/quote-production/FixedPriceEditor';
+import TimeAndMaterialsEditor, {
+  type TmRate,
+  type TmEstimate,
+} from '@/components/quote-production/TimeAndMaterialsEditor';
+import OfferKindPicker, {
+  OFFER_KIND_LABEL,
+  type OfferKind,
+  type PricingStructure,
+} from '@/components/quote-production/OfferKindPicker';
 import type { Section, Shape } from '@/lib/shape';
 import { countPopulated } from '@/lib/shape';
 
@@ -55,10 +65,13 @@ interface Flag {
   text: string;
 }
 
+// Step 3's id stays 'pricing' for backward-compat with all the
+// existing branches that match on it; the visible label reads
+// "Offer" — that's the noun the operator now sees throughout.
 const STEPS = [
   { id: 'intake',  label: 'Intake' },
   { id: 'scope',   label: 'Scope' },
-  { id: 'pricing', label: 'Pricing' },
+  { id: 'pricing', label: 'Offer' },
   { id: 'review',  label: 'Review' },
   { id: 'send',    label: 'Send' },
 ];
@@ -98,6 +111,32 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   const [rebateTerms, setRebateTerms] = createSignal<Array<{ product: string; rebate: string; basis: string }>>([]);
   const [rfiRequirements, setRfiRequirements] = createSignal<string[]>([]);
   const [rfiQuestions, setRfiQuestions] = createSignal<string[]>([]);
+  // Offer step state (renamed from Pricing). Three axes:
+  //   offerKind         — Quote / Bid / Proposal / Contract
+  //   pricingStructure  — fixed_price / itemized / phase_priced /
+  //                       time_and_materials / rebate_program
+  //   autoDetected      — were these picked by scan, or has the
+  //                       operator overridden them?
+  // The picker (top of the Offer step) lets the operator override
+  // whatever scan classified.
+  const [offerKind, setOfferKind] = createSignal<OfferKind>('quote');
+  const [pricingStructure, setPricingStructure] = createSignal<PricingStructure>('itemized');
+  const [offerAutoDetected, setOfferAutoDetected] = createSignal(true);
+
+  // Fixed-price editor state. When pricing_structure = 'fixed_price'
+  // the wizard stores a single line_item under the hood — these two
+  // signals back the description + amount on that line.
+  const [fixedPriceDescription, setFixedPriceDescription] = createSignal('');
+  const [fixedPriceTotal, setFixedPriceTotal] = createSignal(0);
+
+  // T&M editor state — rate cards + estimate band.
+  const [tmRates, setTmRates] = createSignal<TmRate[]>([]);
+  const [tmEstimate, setTmEstimate] = createSignal<TmEstimate>({
+    hours_low: 0,
+    hours_high: 0,
+    materials: 0,
+  });
+
   // Novel-shape (5th wizard path) — when scan confidence is low or
   // proposal_style is 'unknown', we run /api/shape/propose and let
   // the operator confirm a freeform layout in one click. Sections
@@ -148,22 +187,57 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   const useNarrativePricing = createMemo(
     () => lineItems().length === 0 && phases().length > 0 && isNarrativeStyle(),
   );
-  const baseSubtotal = createMemo(() =>
-    useNarrativePricing()
-      ? phasesTotal()
-      : lineItems().reduce((s, li) => s + li.subtotal, 0),
-  );
-  const total = createMemo(() =>
-    useNarrativePricing()
-      ? phasesTotal()
-      : round(
-          lineItems().reduce((s, li) => {
-            const m = li.margin_pct != null ? li.margin_pct : markupPct();
-            return s + li.subtotal * (1 + m / 100);
-          }, 0),
-          2,
-        ),
-  );
+  // Total + baseSubtotal — branched by pricing_structure. Each
+  // structure has its own dollar-math; the wizard's "total" surface
+  // (Review card, PDF, save payload) reads from this memo.
+  const tmMidEstimate = createMemo(() => {
+    const rates = tmRates().filter((r) => r.rate > 0);
+    if (rates.length === 0) return 0;
+    const avg = rates.reduce((s, r) => s + r.rate, 0) / rates.length;
+    const e = tmEstimate();
+    const midHours = (e.hours_low + e.hours_high) / 2;
+    return round(avg * midHours + (e.materials || 0), 2);
+  });
+  const baseSubtotal = createMemo(() => {
+    switch (pricingStructure()) {
+      case 'phase_priced':
+        return phasesTotal();
+      case 'fixed_price':
+        return fixedPriceTotal();
+      case 'time_and_materials':
+        return tmMidEstimate();
+      case 'rebate_program':
+        return 0;
+      case 'itemized':
+      default:
+        return useNarrativePricing()
+          ? phasesTotal()
+          : lineItems().reduce((s, li) => s + li.subtotal, 0);
+    }
+  });
+  const total = createMemo(() => {
+    switch (pricingStructure()) {
+      case 'phase_priced':
+        return phasesTotal();
+      case 'fixed_price':
+        return fixedPriceTotal();
+      case 'time_and_materials':
+        return tmMidEstimate();
+      case 'rebate_program':
+        return 0;
+      case 'itemized':
+      default:
+        return useNarrativePricing()
+          ? phasesTotal()
+          : round(
+              lineItems().reduce((s, li) => {
+                const m = li.margin_pct != null ? li.margin_pct : markupPct();
+                return s + li.subtotal * (1 + m / 100);
+              }, 0),
+              2,
+            );
+    }
+  });
   const marginAmount = createMemo(() => round(total() - baseSubtotal(), 2));
 
   const startScan = async () => {
@@ -189,6 +263,15 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
     setNovelAccepted(false);
     setSectionsData([]);
     setProposeShapeError(null);
+    // Offer-axis signals reset between scans so the new doc's
+    // detection isn't shadowed by the previous one.
+    setOfferKind('quote');
+    setPricingStructure('itemized');
+    setOfferAutoDetected(true);
+    setFixedPriceDescription('');
+    setFixedPriceTotal(0);
+    setTmRates([]);
+    setTmEstimate({ hours_low: 0, hours_high: 0, materials: 0 });
     setRfiResponse({
       requirements_answered: [],
       questions_answered: [],
@@ -226,6 +309,16 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
             setProposalConfidence(payload.payload?.confidence ?? 1);
             setProgramType(payload.payload?.program_type ?? null);
             setTermMonths(payload.payload?.term_months ?? null);
+            // Offer-axis auto-detection: scan returns the suggested
+            // offer_kind + pricing_structure. Operator can override
+            // on the Offer step picker.
+            if (payload.payload?.offer_kind) {
+              setOfferKind(payload.payload.offer_kind as OfferKind);
+            }
+            if (payload.payload?.pricing_structure) {
+              setPricingStructure(payload.payload.pricing_structure as PricingStructure);
+            }
+            setOfferAutoDetected(true);
           }
           else if (payload.type === 'line_item') setLineItems([...lineItems(), payload.payload]);
           else if (payload.type === 'phase')     setPhases([...phases(), payload.payload]);
@@ -368,6 +461,12 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           // Novel-path output. Server renders sections in order.
           sections_data: novel ? sectionsData() : null,
           shape_name: novel ? novelShape()?.name : null,
+          offer_kind: offerKind(),
+          pricing_structure: pricingStructure(),
+          tm_rates: pricingStructure() === 'time_and_materials' ? tmRates() : null,
+          tm_estimate: pricingStructure() === 'time_and_materials' ? tmEstimate() : null,
+          fixed_price_description:
+            pricingStructure() === 'fixed_price' ? fixedPriceDescription() : null,
           total: total(),
           shop: props.shop,
         }),
@@ -409,9 +508,31 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           source: 'manual',
           total: total(),
           margin_pct: markupPct(),
-          // In novel-path the operator's output is sections_data,
-          // not line_items. Skip the line_items payload entirely.
-          line_items: novel ? [] : lineItems(),
+          // line_items: for itemized, the editable rows; for
+          // fixed-price, a synthesized single-row payload so the
+          // existing line_items table on the DB still has the price
+          // (the operator's "what's the engagement" + "total fee").
+          line_items: novel
+            ? []
+            : pricingStructure() === 'fixed_price'
+              ? [
+                  {
+                    position: 1,
+                    description: fixedPriceDescription() || projectTitle(),
+                    qty: 1,
+                    unit: 'lump_sum',
+                    unit_price: fixedPriceTotal(),
+                    subtotal: fixedPriceTotal(),
+                    category: 'services',
+                    confidence: 'manual',
+                    margin_pct: null,
+                  },
+                ]
+              : pricingStructure() === 'time_and_materials' ||
+                  pricingStructure() === 'rebate_program' ||
+                  pricingStructure() === 'phase_priced'
+                ? []
+                : lineItems(),
           proposal_style: novel ? 'novel' : proposalStyle(),
           program_type: programType(),
           term_months: termMonths(),
@@ -419,6 +540,11 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           rfi_response: proposalStyle() === 'rfi_received' ? rfiResponse() : null,
           shape_id: novel ? novelShapeId() : null,
           sections_data: novel ? sectionsData() : null,
+          // Offer axes — migration 012.
+          offer_kind: offerKind(),
+          pricing_structure: pricingStructure(),
+          tm_rates: pricingStructure() === 'time_and_materials' ? tmRates() : null,
+          tm_estimate: pricingStructure() === 'time_and_materials' ? tmEstimate() : null,
         }),
       });
       if (!saveResp.ok) throw new Error(`Save failed: ${await saveResp.text()}`);
@@ -527,6 +653,25 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
               setPhases={setPhases}
               rebateTerms={rebateTerms}
               narrativePricing={useNarrativePricing}
+              offerKind={offerKind}
+              setOfferKind={(v) => {
+                setOfferKind(v);
+                setOfferAutoDetected(false);
+              }}
+              pricingStructure={pricingStructure}
+              setPricingStructure={(v) => {
+                setPricingStructure(v);
+                setOfferAutoDetected(false);
+              }}
+              offerAutoDetected={offerAutoDetected}
+              fixedPriceDescription={fixedPriceDescription}
+              setFixedPriceDescription={setFixedPriceDescription}
+              fixedPriceTotal={fixedPriceTotal}
+              setFixedPriceTotal={setFixedPriceTotal}
+              tmRates={tmRates}
+              setTmRates={setTmRates}
+              tmEstimate={tmEstimate}
+              setTmEstimate={setTmEstimate}
               onBack={() => setStepIdx(1)}
               onContinue={goToReview}
             />
@@ -1492,6 +1637,19 @@ function PricingStep(p: {
   setPhases: (p: Phase[]) => void;
   rebateTerms: () => Array<{ product: string; rebate: string; basis: string }>;
   narrativePricing: () => boolean;
+  offerKind: () => OfferKind;
+  setOfferKind: (v: OfferKind) => void;
+  pricingStructure: () => PricingStructure;
+  setPricingStructure: (v: PricingStructure) => void;
+  offerAutoDetected: () => boolean;
+  fixedPriceDescription: () => string;
+  setFixedPriceDescription: (v: string) => void;
+  fixedPriceTotal: () => number;
+  setFixedPriceTotal: (v: number) => void;
+  tmRates: () => TmRate[];
+  setTmRates: (v: TmRate[]) => void;
+  tmEstimate: () => TmEstimate;
+  setTmEstimate: (v: TmEstimate) => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
@@ -1505,29 +1663,50 @@ function PricingStep(p: {
   const isRebateOnly = () =>
     isPartnership() && p.rebateTerms().length > 0 && p.phases().length === 0;
 
+  const offerTitle = () => {
+    switch (p.pricingStructure()) {
+      case 'rebate_program':
+        return 'Rebate terms read; no price needed.';
+      case 'phase_priced':
+        return 'Price each phase.';
+      case 'fixed_price':
+        return 'Set the fixed price.';
+      case 'time_and_materials':
+        return 'Set the rates + estimate.';
+      default:
+        return 'Confirm the numbers.';
+    }
+  };
+
   return (
     <div>
       <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-        Step 3 · Pricing
+        Step 3 · Offer
       </div>
       <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">
-        {isRebateOnly()
-          ? 'Rebate terms read; no price needed.'
-          : p.narrativePricing()
-            ? 'Price each phase.'
-            : 'Confirm the numbers.'}
+        {offerTitle()}
       </h1>
 
-      <Show when={isRebateOnly()}>
+      <div class="mt-5">
+        <OfferKindPicker
+          offerKind={p.offerKind}
+          setOfferKind={p.setOfferKind}
+          pricingStructure={p.pricingStructure}
+          setPricingStructure={p.setPricingStructure}
+          autoDetected={p.offerAutoDetected}
+        />
+      </div>
+
+      <Show when={p.pricingStructure() === 'rebate_program'}>
         <div class="mt-5 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-paper-2,#f6f4ef)] p-5">
           <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
             Rebate program — {p.rebateTerms().length} term{p.rebateTerms().length === 1 ? '' : 's'}
           </div>
           <p class="text-[13px] text-[color:var(--color-ink-2)] leading-relaxed">
-            This is a partnership proposal — the operator's deliverable is the
-            program structure (rebate rates, training, transition plan), not a
-            project total. You can continue without entering a price; the
-            rebate terms render on the PDF.
+            The operator's deliverable is the program structure (rebate
+            rates, training, transition plan), not a project total. You
+            can continue without entering a price; the rebate terms render
+            on the PDF.
           </p>
           <ul class="mt-3 divide-y divide-[color:var(--color-line)] text-sm">
             <For each={p.rebateTerms()}>
@@ -1543,9 +1722,31 @@ function PricingStep(p: {
         </div>
       </Show>
 
+      <Show when={p.pricingStructure() === 'fixed_price'}>
+        <div class="mt-5">
+          <FixedPriceEditor
+            description={p.fixedPriceDescription}
+            setDescription={p.setFixedPriceDescription}
+            total={p.fixedPriceTotal}
+            setTotal={p.setFixedPriceTotal}
+          />
+        </div>
+      </Show>
+
+      <Show when={p.pricingStructure() === 'time_and_materials'}>
+        <div class="mt-5">
+          <TimeAndMaterialsEditor
+            rates={p.tmRates}
+            setRates={p.setTmRates}
+            estimate={p.tmEstimate}
+            setEstimate={p.setTmEstimate}
+          />
+        </div>
+      </Show>
+
       <Show
-        when={p.narrativePricing()}
-        fallback={
+        when={p.pricingStructure() === 'phase_priced'}
+        fallback={<Show when={p.pricingStructure() === 'itemized'}>{(() => (
       <div class="mt-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-x-auto">
           <div class="grid grid-cols-[3fr_60px_70px_90px_70px_100px_36px] min-w-[720px] px-4 py-3 border-b border-[color:var(--color-line)] text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
@@ -1678,6 +1879,7 @@ function PricingStep(p: {
         />
         </div>
       </div>
+        ))()}</Show>
         }
       >
         <div class="mt-6">
@@ -1708,33 +1910,43 @@ function PricingStep(p: {
 }
 
 /**
- * Pricing Continue gate. Adapts by proposal style:
- *   project_quote  → needs at least one line item
- *   consulting     → needs at least one phase with a fee (total > 0)
- *   partnership    → needs rebate_terms OR priced phases.
- *                    Rebate-only programs are valid with total $0 —
- *                    the operator is proposing a structure, not
- *                    invoicing a number.
- *   rfi_received   → handled by its own step (RfiStep), not Pricing
- *   unknown        → falls through to line-item check
+ * Offer Continue gate. Keyed to pricing_structure now, not proposal_style.
+ *   itemized            → ≥1 line item
+ *   phase_priced        → ≥1 phase with a fee (total > 0)
+ *   fixed_price         → description + total > 0
+ *   time_and_materials  → ≥1 rate + estimated hours > 0
+ *   rebate_program      → ≥1 rebate term  (total $0 is fine — operator
+ *                         is proposing structure, not invoicing)
  */
 function canContinueFromPricing(p: {
   proposalStyle: () => 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown';
+  pricingStructure: () => PricingStructure;
   lineItems: () => LineItem[];
   phases: () => Phase[];
   rebateTerms: () => Array<{ product: string; rebate: string; basis: string }>;
   total: () => number;
+  fixedPriceDescription: () => string;
+  fixedPriceTotal: () => number;
+  tmRates: () => TmRate[];
+  tmEstimate: () => TmEstimate;
 }): boolean {
-  const style = p.proposalStyle();
-  if (style === 'partnership') {
-    if (p.rebateTerms().length > 0) return true;
-    if (p.phases().length > 0 && p.total() > 0) return true;
-    return p.lineItems().length > 0;
+  switch (p.pricingStructure()) {
+    case 'itemized':
+      return p.lineItems().length > 0;
+    case 'phase_priced':
+      return p.phases().length > 0 && p.total() > 0;
+    case 'fixed_price':
+      return p.fixedPriceDescription().trim().length > 0 && p.fixedPriceTotal() > 0;
+    case 'time_and_materials':
+      return (
+        p.tmRates().filter((r) => r.rate > 0).length > 0 &&
+        p.tmEstimate().hours_high > 0
+      );
+    case 'rebate_program':
+      return p.rebateTerms().length > 0;
+    default:
+      return false;
   }
-  if (style === 'consulting') {
-    return p.phases().length > 0 && p.total() > 0;
-  }
-  return p.lineItems().length > 0;
 }
 
 function RfiStep(p: {

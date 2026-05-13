@@ -42,6 +42,17 @@ interface SaveBody {
    * is the operator-edited content for each section. */
   shape_id?: string | null;
   sections_data?: Array<Record<string, unknown>> | null;
+  /** Offer axes — migration 012. */
+  offer_kind?: 'quote' | 'bid' | 'proposal' | 'contract' | null;
+  pricing_structure?:
+    | 'fixed_price'
+    | 'itemized'
+    | 'phase_priced'
+    | 'time_and_materials'
+    | 'rebate_program'
+    | null;
+  tm_rates?: Array<{ role: string; rate: number }> | null;
+  tm_estimate?: { hours_low: number; hours_high: number; materials: number } | null;
   rfi_response?: {
     requirements_answered?: Array<{ requirement: string; response: string }>;
     questions_answered?: Array<{ question: string; answer: string }>;
@@ -159,6 +170,10 @@ export const POST: APIRoute = async ({ request, locals }) => {
     rfi_response: body.rfi_response ?? null,
     shape_id: body.shape_id ?? null,
     sections_data: body.sections_data && body.sections_data.length > 0 ? body.sections_data : null,
+    offer_kind: body.offer_kind ?? null,
+    pricing_structure: body.pricing_structure ?? null,
+    tm_rates: body.tm_rates && body.tm_rates.length > 0 ? body.tm_rates : null,
+    tm_estimate: body.tm_estimate ?? null,
   };
 
   let quoteId: string;
