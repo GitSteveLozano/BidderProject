@@ -2,12 +2,14 @@
  * POST /api/quote/send
  *
  * Transition a DRAFT quote to SENT. Records the event for the activity
- * feed. When channel='email' and the client has an email on file, the
- * quote link is delivered via Resend; otherwise the endpoint succeeds
- * as a "marked sent" record so the operator can deliver manually
- * (matches the pre-Resend behavior).
+ * feed. When channel='email', delivers to the recipients on the body
+ * (or, if omitted, every always_notify contact + the legacy
+ * primary_contact_email fallback).
  *
- * Body: { quote_id: string, channel?: 'email' | 'manual' }
+ * Body:
+ *   { quote_id: string,
+ *     channel?: 'email' | 'manual',
+ *     recipients?: { to?: string[], cc?: string[] } }
  */
 import type { APIRoute } from 'astro';
 
@@ -21,7 +23,11 @@ export const POST: APIRoute = async ({ request, locals, url }) => {
   if (!env) return json({ error: 'Cloudflare runtime not available' }, 500);
   if (!locals.user || !locals.membership) return json({ error: 'Not authenticated' }, 401);
 
-  let body: { quote_id?: string; channel?: 'email' | 'manual' };
+  let body: {
+    quote_id?: string;
+    channel?: 'email' | 'manual';
+    recipients?: { to?: string[]; cc?: string[] };
+  };
   try {
     body = await request.json();
   } catch {
@@ -54,32 +60,60 @@ export const POST: APIRoute = async ({ request, locals, url }) => {
       .select('primary_contact_email, primary_contact_name')
       .eq('id', quote.client_id)
       .maybeSingle();
+    const { data: contacts } = await svc
+      .from('client_contacts')
+      .select('email, name, always_notify, is_primary')
+      .eq('client_id', quote.client_id);
     const { data: shop } = await svc
       .from('shops')
       .select('owner_email, trade_name, legal_name')
       .eq('id', shopId)
       .maybeSingle();
 
-    const recipientEmail = client?.primary_contact_email;
-    if (!recipientEmail) {
-      deliveryError = 'No email on file for client — marked sent without delivery';
+    // Resolve recipients: explicit list wins; otherwise default to
+    // always_notify contacts; otherwise fall back to legacy primary.
+    const recipientsTo = body.recipients?.to?.filter((e) => e && e.includes('@')) ?? [];
+    const recipientsCc = body.recipients?.cc?.filter((e) => e && e.includes('@')) ?? [];
+
+    let to = recipientsTo;
+    let cc = recipientsCc;
+    if (to.length === 0) {
+      const defaults = (contacts ?? [])
+        .filter((c: any) => c.email && c.always_notify)
+        .map((c: any) => c.email as string);
+      if (defaults.length > 0) {
+        to = defaults;
+      } else if (client?.primary_contact_email) {
+        to = [client.primary_contact_email];
+      }
+    }
+
+    if (to.length === 0) {
+      deliveryError = 'No recipients resolved — marked sent without delivery';
     } else {
       const fromLabel = shop?.trade_name || shop?.legal_name || 'Your contractor';
       const publicLink = `${url.origin}/q/${quote.id}`;
       const pixel = `${url.origin}/api/quote/${quote.id}/track-open?from=email`;
       const totalStr = `$${Number(quote.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
+      // Greeting uses the primary contact's name if their email is in
+      // the to-list, otherwise generic.
+      const primary = (contacts ?? []).find(
+        (c: any) => c.is_primary && c.email && to.includes(c.email),
+      );
+      const greetingName = primary?.name ?? client?.primary_contact_name ?? '';
       const result = await sendEmail(env, {
-        to: recipientEmail,
+        to,
+        cc: cc.length > 0 ? cc : undefined,
         reply_to: shop?.owner_email ?? undefined,
         subject: `Quote for ${quote.project_title} · ${quote.ref}`,
         text:
-          `Hi ${client.primary_contact_name ?? recipientEmail},\n\n` +
+          `${greetingName ? `Hi ${greetingName},\n\n` : 'Hello,\n\n'}` +
           `Here's the quote for ${quote.project_title}. Total: ${totalStr}.\n\n` +
           `Read it here: ${publicLink}\n\n` +
           `Reply to this email with any questions.\n\n` +
           `— ${fromLabel}`,
         html:
-          `<p>Hi ${escapeHtml(client.primary_contact_name ?? recipientEmail)},</p>` +
+          `<p>${greetingName ? `Hi ${escapeHtml(greetingName)},` : 'Hello,'}</p>` +
           `<p>Here's the quote for <strong>${escapeHtml(quote.project_title)}</strong>. Total: <strong>${totalStr}</strong>.</p>` +
           `<p><a href="${publicLink}" style="background:#a85432;color:#fffaf2;padding:10px 16px;border-radius:8px;text-decoration:none;display:inline-block;font-family:sans-serif;font-size:14px">Read the quote</a></p>` +
           `<p>Reply to this email with any questions.</p>` +
@@ -105,7 +139,12 @@ export const POST: APIRoute = async ({ request, locals, url }) => {
     quote_id: quote.id,
     type: 'quote.sent',
     actor: locals.user.email ?? 'user',
-    payload: { channel, delivery, delivery_error: deliveryError },
+    payload: {
+      channel,
+      delivery,
+      delivery_error: deliveryError,
+      recipients: body.recipients ?? null,
+    },
   });
 
   return json(

@@ -11,6 +11,7 @@ import Brief from '@/layouts/Brief.astro';
 import StatusPill from '@/components/ui/StatusPill';
 import Pill from '@/components/ui/Pill';
 import ClientNotes from '@/components/clients/ClientNotes';
+import ContactsList from '@/components/clients/ContactsList';
 import { client as supabaseService } from '@/lib/supabase';
 import { fmtCurrencyFull, fmtCurrencyCompact, fmtRelativeDate } from '@/lib/quote-helpers';
 
@@ -55,6 +56,13 @@ const { data: events } = await svc
   .in('quote_id', (quotes ?? []).map((q: any) => q.id))
   .order('created_at', { ascending: false })
   .limit(40);
+
+const { data: contacts } = await svc
+  .from('client_contacts')
+  .select('id, client_id, name, email, phone, title, is_primary, always_notify')
+  .eq('client_id', id)
+  .order('is_primary', { ascending: false })
+  .order('created_at', { ascending: true });
 
 const { data: shop } = await svc
   .from('shops')
@@ -234,37 +242,33 @@ const eventLabels: Record<string, string> = {
     </div>
 
     <aside class="space-y-6">
-      <!-- Contact card -->
+      <!-- Contacts — multi-contact CRUD. Existing clients with a
+           primary_contact on the clients row see a one-click "Add as
+           contact" prompt so the legacy info isn't lost. -->
       <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
-        <h3 class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-3">Contact</h3>
-        <dl class="space-y-2.5 text-sm">
-          {client.primary_contact_name && (
-            <div>
-              <dt class="text-xs text-[color:var(--color-muted)]">Name</dt>
-              <dd class="font-medium mt-0.5">{client.primary_contact_name}</dd>
+        <h3 class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-3">Contacts</h3>
+        <ContactsList
+          client:load
+          client_id={client.id}
+          initial={contacts ?? []}
+          legacy_primary={
+            (contacts ?? []).length === 0 && (client.primary_contact_name || client.primary_contact_email || client.primary_contact_phone)
+              ? {
+                  name: client.primary_contact_name,
+                  email: client.primary_contact_email,
+                  phone: client.primary_contact_phone,
+                }
+              : null
+          }
+        />
+        {(client.address_line || client.city || client.state_code) && (
+          <div class="mt-5 pt-4 border-t border-[color:var(--color-line)] text-sm">
+            <div class="text-xs text-[color:var(--color-muted)]">Address</div>
+            <div class="mt-0.5 font-serif text-[14px] text-[color:var(--color-ink-2)] leading-snug">
+              {[client.address_line, [client.city, client.state_code].filter(Boolean).join(', ')].filter(Boolean).join('\n').split('\n').map((line: string) => <div>{line}</div>)}
             </div>
-          )}
-          {client.primary_contact_email && (
-            <div>
-              <dt class="text-xs text-[color:var(--color-muted)]">Email</dt>
-              <dd class="mt-0.5"><a href={`mailto:${client.primary_contact_email}`} class="hover:underline text-[color:var(--color-accent)]">{client.primary_contact_email}</a></dd>
-            </div>
-          )}
-          {client.primary_contact_phone && (
-            <div>
-              <dt class="text-xs text-[color:var(--color-muted)]">Phone</dt>
-              <dd class="font-mono mt-0.5">{client.primary_contact_phone}</dd>
-            </div>
-          )}
-          {(client.address_line || client.city || client.state_code) && (
-            <div>
-              <dt class="text-xs text-[color:var(--color-muted)]">Address</dt>
-              <dd class="mt-0.5 font-serif text-[14px] text-[color:var(--color-ink-2)] leading-snug">
-                {[client.address_line, [client.city, client.state_code].filter(Boolean).join(', ')].filter(Boolean).join('\n').split('\n').map((line: string) => <div>{line}</div>)}
-              </dd>
-            </div>
-          )}
-        </dl>
+          </div>
+        )}
       </div>
 
       <!-- Relationship KPIs -->

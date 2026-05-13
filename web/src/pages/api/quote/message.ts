@@ -26,6 +26,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     body?: string;
     drafted_by?: 'brief' | 'user';
     scheduled_for?: string | null;
+    recipients?: { to?: string[]; cc?: string[]; phones?: string[] };
   };
   try {
     body = await request.json();
@@ -56,6 +57,10 @@ export const POST: APIRoute = async ({ request, locals }) => {
       .select('primary_contact_email, primary_contact_phone, primary_contact_name')
       .eq('id', quote.client_id)
       .maybeSingle();
+    const { data: contacts } = await svc
+      .from('client_contacts')
+      .select('email, phone, always_notify, is_primary')
+      .eq('client_id', quote.client_id);
     const { data: shop } = await svc
       .from('shops')
       .select('owner_email, trade_name, legal_name')
@@ -64,11 +69,24 @@ export const POST: APIRoute = async ({ request, locals }) => {
     const fromLabel = shop?.trade_name || shop?.legal_name || 'Your contractor';
 
     if (channel === 'email') {
-      if (!client?.primary_contact_email) {
-        deliveryError = 'No email on file for client';
+      const explicit = body.recipients?.to?.filter((e) => e && e.includes('@')) ?? [];
+      const defaults = (contacts ?? [])
+        .filter((c: any) => c.email && c.always_notify)
+        .map((c: any) => c.email as string);
+      const to = explicit.length > 0
+        ? explicit
+        : defaults.length > 0
+          ? defaults
+          : client?.primary_contact_email
+            ? [client.primary_contact_email]
+            : [];
+      const cc = body.recipients?.cc?.filter((e) => e && e.includes('@')) ?? [];
+      if (to.length === 0) {
+        deliveryError = 'No email recipients on file';
       } else {
         const result = await sendEmail(env, {
-          to: client.primary_contact_email,
+          to,
+          cc: cc.length > 0 ? cc : undefined,
           reply_to: shop?.owner_email ?? undefined,
           subject: body.subject ?? `Re: ${quote.project_title} · ${quote.ref}`,
           text: body.body,
@@ -77,15 +95,34 @@ export const POST: APIRoute = async ({ request, locals }) => {
         else deliveryError = result.message;
       }
     } else if (channel === 'sms') {
-      if (!client?.primary_contact_phone) {
+      const explicitPhones = body.recipients?.phones?.filter((p) => !!p) ?? [];
+      const fallbackPhones = (contacts ?? [])
+        .filter((c: any) => c.phone && c.always_notify)
+        .map((c: any) => c.phone as string);
+      const phones = explicitPhones.length > 0
+        ? explicitPhones
+        : fallbackPhones.length > 0
+          ? fallbackPhones
+          : client?.primary_contact_phone
+            ? [client.primary_contact_phone]
+            : [];
+      if (phones.length === 0) {
         deliveryError = 'No phone on file for client';
       } else {
-        const result = await sendSms(env, {
-          to: client.primary_contact_phone,
-          body: `${body.body}\n\n— ${fromLabel}`,
-        });
-        if (result.ok) delivery = { provider: result.provider, id: result.id };
-        else deliveryError = result.message;
+        // SMS is one message per recipient — Twilio doesn't bcc-style fan out.
+        const results = await Promise.all(
+          phones.map((to) =>
+            sendSms(env, { to, body: `${body.body}\n\n— ${fromLabel}` }),
+          ),
+        );
+        const firstOk = results.find((r) => r.ok);
+        if (firstOk && firstOk.ok) delivery = { provider: firstOk.provider, id: firstOk.id };
+        const failures = results.filter((r) => !r.ok);
+        if (failures.length === results.length) {
+          deliveryError = failures.map((f) => (f as any).message).join(' · ');
+        } else if (failures.length > 0) {
+          deliveryError = `Sent to ${results.length - failures.length}/${results.length}; failures: ${failures.map((f) => (f as any).message).join(' · ')}`;
+        }
       }
     }
   }
@@ -114,7 +151,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     quote_id: quote.id,
     type: 'nudge.sent',
     actor: locals.user.email ?? 'user',
-    payload: { channel, delivery, delivery_error: deliveryError },
+    payload: { channel, delivery, delivery_error: deliveryError, recipients: body.recipients ?? null },
   });
 
   return json({ ok: true, delivery, delivery_error: deliveryError }, 200);
