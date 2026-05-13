@@ -266,6 +266,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   const renderPdf = async () => {
     setRenderingPdf(true);
     try {
+      const narrative = useNarrativePricing();
       const resp = await fetch('/api/quote/render-pdf', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -276,18 +277,27 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           project_title: projectTitle(),
           project_address: projectAddress(),
           scope_summary: scopeSummary(),
+          proposal_style: proposalStyle(),
+          program_type: programType(),
+          term_months: termMonths(),
           // Pre-apply per-line margin so the PDF shows the customer-
           // facing price per line. unit_price stays as cost basis on
           // the wizard; the PDF only needs the all-in line subtotal.
-          line_items: lineItems().map((li) => {
-            const m = li.margin_pct != null ? li.margin_pct : markupPct();
-            const lineTotal = round(li.subtotal * (1 + m / 100), 2);
-            return {
-              ...li,
-              unit_price: round(li.unit_price * (1 + m / 100), 2),
-              subtotal: lineTotal,
-            };
-          }),
+          // Skipped entirely in narrative mode — partnership/consulting
+          // proposals price by phase, not by qty × unit.
+          line_items: narrative
+            ? []
+            : lineItems().map((li) => {
+                const m = li.margin_pct != null ? li.margin_pct : markupPct();
+                const lineTotal = round(li.subtotal * (1 + m / 100), 2);
+                return {
+                  ...li,
+                  unit_price: round(li.unit_price * (1 + m / 100), 2),
+                  subtotal: lineTotal,
+                };
+              }),
+          phases: phases().length > 0 ? phases() : null,
+          rebate_terms: rebateTerms().length > 0 ? rebateTerms() : null,
           total: total(),
           shop: props.shop,
         }),
@@ -425,6 +435,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
               proposalStyle={proposalStyle}
               phases={phases}
               setPhases={setPhases}
+              rebateTerms={rebateTerms}
               narrativePricing={useNarrativePricing}
               onBack={() => setStepIdx(1)}
               onContinue={goToReview}
@@ -464,6 +475,10 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           setClientContactPhone={setClientContactPhone}
           projectTitle={projectTitle}
           projectAddress={projectAddress}
+          proposalStyle={proposalStyle}
+          phases={phases}
+          rebateTerms={rebateTerms}
+          termMonths={termMonths}
           shop={props.shop}
           onBack={() => setStepIdx(2)}
           onSend={saveAndSend}
@@ -1321,6 +1336,7 @@ function PricingStep(p: {
   proposalStyle: () => 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown';
   phases: () => Phase[];
   setPhases: (p: Phase[]) => void;
+  rebateTerms: () => Array<{ product: string; rebate: string; basis: string }>;
   narrativePricing: () => boolean;
   onBack: () => void;
   onContinue: () => void;
@@ -1331,14 +1347,47 @@ function PricingStep(p: {
     p.setPhases(next);
   };
 
+  const isPartnership = () => p.proposalStyle() === 'partnership';
+  const isRebateOnly = () =>
+    isPartnership() && p.rebateTerms().length > 0 && p.phases().length === 0;
+
   return (
     <div>
       <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
         Step 3 · Pricing
       </div>
       <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">
-        {p.narrativePricing() ? 'Price each phase.' : 'Confirm the numbers.'}
+        {isRebateOnly()
+          ? 'Rebate terms read; no price needed.'
+          : p.narrativePricing()
+            ? 'Price each phase.'
+            : 'Confirm the numbers.'}
       </h1>
+
+      <Show when={isRebateOnly()}>
+        <div class="mt-5 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-paper-2,#f6f4ef)] p-5">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
+            Rebate program — {p.rebateTerms().length} term{p.rebateTerms().length === 1 ? '' : 's'}
+          </div>
+          <p class="text-[13px] text-[color:var(--color-ink-2)] leading-relaxed">
+            This is a partnership proposal — the operator's deliverable is the
+            program structure (rebate rates, training, transition plan), not a
+            project total. You can continue without entering a price; the
+            rebate terms render on the PDF.
+          </p>
+          <ul class="mt-3 divide-y divide-[color:var(--color-line)] text-sm">
+            <For each={p.rebateTerms()}>
+              {(rt) => (
+                <li class="py-2 grid grid-cols-[1fr_120px_1fr] gap-3 items-baseline">
+                  <span class="font-medium">{rt.product}</span>
+                  <span class="font-mono tabular-nums text-right">{rt.rebate}</span>
+                  <span class="text-[color:var(--color-muted)] text-[12.5px]">{rt.basis}</span>
+                </li>
+              )}
+            </For>
+          </ul>
+        </div>
+      </Show>
 
       <Show
         when={p.narrativePricing()}
@@ -1494,11 +1543,7 @@ function PricingStep(p: {
         <Button variant="ghost" onClick={p.onBack}>← Back</Button>
         <Button
           variant="accent"
-          disabled={
-            p.narrativePricing()
-              ? p.phases().length === 0 || p.total() <= 0
-              : p.lineItems().length === 0
-          }
+          disabled={!canContinueFromPricing(p)}
           onClick={p.onContinue}
         >
           Continue to review →
@@ -1506,6 +1551,36 @@ function PricingStep(p: {
       </div>
     </div>
   );
+}
+
+/**
+ * Pricing Continue gate. Adapts by proposal style:
+ *   project_quote  → needs at least one line item
+ *   consulting     → needs at least one phase with a fee (total > 0)
+ *   partnership    → needs rebate_terms OR priced phases.
+ *                    Rebate-only programs are valid with total $0 —
+ *                    the operator is proposing a structure, not
+ *                    invoicing a number.
+ *   rfi_received   → handled by its own step (RfiStep), not Pricing
+ *   unknown        → falls through to line-item check
+ */
+function canContinueFromPricing(p: {
+  proposalStyle: () => 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown';
+  lineItems: () => LineItem[];
+  phases: () => Phase[];
+  rebateTerms: () => Array<{ product: string; rebate: string; basis: string }>;
+  total: () => number;
+}): boolean {
+  const style = p.proposalStyle();
+  if (style === 'partnership') {
+    if (p.rebateTerms().length > 0) return true;
+    if (p.phases().length > 0 && p.total() > 0) return true;
+    return p.lineItems().length > 0;
+  }
+  if (style === 'consulting') {
+    return p.phases().length > 0 && p.total() > 0;
+  }
+  return p.lineItems().length > 0;
 }
 
 function RfiStep(p: {
@@ -1610,6 +1685,10 @@ function ReviewStep(p: {
   setClientContactPhone: (v: string) => void;
   projectTitle: () => string;
   projectAddress: () => string;
+  proposalStyle: () => 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown';
+  phases: () => Phase[];
+  rebateTerms: () => Array<{ product: string; rebate: string; basis: string }>;
+  termMonths: () => number | null;
   shop: ShopContext;
   onBack: () => void;
   onSend: () => void;
@@ -1641,20 +1720,63 @@ function ReviewStep(p: {
     return e.length > 3 && e.includes('@') && e.includes('.');
   };
 
+  // Style-aware view flags. Hide markup math + relax "needs line
+  // items" for partnership/consulting where total may be 0 or
+  // structured as phases/rebates.
+  const isPartnership = () => p.proposalStyle() === 'partnership';
+  const isConsulting = () => p.proposalStyle() === 'consulting';
+  const isNarrative = () => isPartnership() || isConsulting();
+  const hidesMarkup = () => isNarrative();
+
   // Pre-send readiness checks — each row gets a green check or a soft warning.
   const checks = createMemo(() => {
     const items = p.lineItems();
-    return [
-      {
+    const rebates = p.rebateTerms();
+    const phaseCount = p.phases().length;
+    const pricedPhaseCount = p.phases().filter((ph) => Number(ph.fee) > 0).length;
+
+    // The "what's on the proposal" row adapts by style.
+    let contentCheck: { ok: boolean; label: string; sub?: string };
+    if (isPartnership() && rebates.length > 0) {
+      contentCheck = {
+        ok: true,
+        label: `${rebates.length} rebate term${rebates.length === 1 ? '' : 's'}${phaseCount > 0 ? ` · ${phaseCount} phase${phaseCount === 1 ? '' : 's'}` : ''}`,
+      };
+    } else if (isConsulting() || (isPartnership() && phaseCount > 0)) {
+      contentCheck = {
+        ok: pricedPhaseCount > 0,
+        label: `${pricedPhaseCount} of ${phaseCount} phase${phaseCount === 1 ? '' : 's'} priced`,
+        sub:
+          pricedPhaseCount === 0
+            ? 'Add a fee to at least one phase on the Pricing step.'
+            : undefined,
+      };
+    } else {
+      contentCheck = {
         ok: items.length > 0,
         label: `${items.length} line item${items.length === 1 ? '' : 's'} priced`,
-        sub: items.length === 0 ? 'Pricing step is empty — go back and add at least one line.' : undefined,
-      },
-      {
+        sub:
+          items.length === 0
+            ? 'Pricing step is empty — go back and add at least one line.'
+            : undefined,
+      };
+    }
+
+    const rows: Array<{ ok: boolean; label: string; sub?: string }> = [contentCheck];
+
+    // Markup row — only meaningful for project_quote with line items.
+    if (!hidesMarkup()) {
+      rows.push({
         ok: p.markupPct() >= 20,
         label: `${p.markupPct().toFixed(0)}% markup applied`,
-        sub: p.markupPct() < 20 ? 'Below your typical floor; double-check this is intentional.' : undefined,
-      },
+        sub:
+          p.markupPct() < 20
+            ? 'Below your typical floor; double-check this is intentional.'
+            : undefined,
+      });
+    }
+
+    rows.push(
       {
         ok: !!p.projectAddress().trim(),
         label: 'Project address on the quote',
@@ -1669,7 +1791,8 @@ function ReviewStep(p: {
           ? 'Add a contact email on Intake (or to the client later) for Brief to deliver this.'
           : undefined,
       },
-    ];
+    );
+    return rows;
   });
 
   return (
@@ -1795,29 +1918,52 @@ function ReviewStep(p: {
             </Show>
           </div>
 
-          {/* Final price card */}
+          {/* Final price card. Partnership pitches with rebate-only
+              structure don't carry a quantifiable total — show the
+              program shape instead of "$0.00", and skip the markup row. */}
           <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
-            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">Final price</div>
-            <div class="mt-1 font-serif text-[32px] font-medium tabular-nums leading-none">
-              {fmt(p.total())}
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+              {isPartnership() && p.total() === 0 ? 'Program' : 'Final price'}
             </div>
+            <Show
+              when={isPartnership() && p.total() === 0}
+              fallback={
+                <div class="mt-1 font-serif text-[32px] font-medium tabular-nums leading-none">
+                  {fmt(p.total())}
+                </div>
+              }
+            >
+              <div class="mt-1 font-serif text-[22px] font-medium leading-snug">
+                Rebate program
+              </div>
+              <div class="text-[12.5px] text-[color:var(--color-muted)] mt-1">
+                {p.rebateTerms().length} term{p.rebateTerms().length === 1 ? '' : 's'}
+                {p.termMonths() ? ` · ${p.termMonths()} mo` : ''}
+              </div>
+            </Show>
             <div class="mt-2 text-[12.5px] text-[color:var(--color-muted)]">
               to <span class="font-medium text-[color:var(--color-ink)]">{recipient()}</span>
             </div>
-            <dl class="mt-4 space-y-1.5 text-[13px] border-t border-[color:var(--color-line)] pt-3">
-              <div class="flex justify-between">
-                <dt class="text-[color:var(--color-muted)]">Line items subtotal</dt>
-                <dd class="font-mono tabular-nums">{fmt(p.baseSubtotal())}</dd>
-              </div>
-              <div class="flex justify-between">
-                <dt class="text-[color:var(--color-muted)]">Markup ({p.markupPct().toFixed(0)}%)</dt>
-                <dd class="font-mono tabular-nums">{fmt(p.marginAmount())}</dd>
-              </div>
-              <div class="flex justify-between font-medium pt-1.5 border-t border-[color:var(--color-line)]">
-                <dt>Total</dt>
-                <dd class="font-mono tabular-nums">{fmt(p.total())}</dd>
-              </div>
-            </dl>
+            <Show when={!(isPartnership() && p.total() === 0)}>
+              <dl class="mt-4 space-y-1.5 text-[13px] border-t border-[color:var(--color-line)] pt-3">
+                <div class="flex justify-between">
+                  <dt class="text-[color:var(--color-muted)]">
+                    {isNarrative() ? 'Phase fees subtotal' : 'Line items subtotal'}
+                  </dt>
+                  <dd class="font-mono tabular-nums">{fmt(p.baseSubtotal())}</dd>
+                </div>
+                <Show when={!hidesMarkup()}>
+                  <div class="flex justify-between">
+                    <dt class="text-[color:var(--color-muted)]">Markup ({p.markupPct().toFixed(0)}%)</dt>
+                    <dd class="font-mono tabular-nums">{fmt(p.marginAmount())}</dd>
+                  </div>
+                </Show>
+                <div class="flex justify-between font-medium pt-1.5 border-t border-[color:var(--color-line)]">
+                  <dt>Total</dt>
+                  <dd class="font-mono tabular-nums">{fmt(p.total())}</dd>
+                </div>
+              </dl>
+            </Show>
           </div>
 
           {/* Pre-send checklist */}
