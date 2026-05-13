@@ -22,7 +22,10 @@ export type DeliveryResult =
   | { ok: false; kind: DeliveryFailureKind; message: string };
 
 interface EmailInput {
-  to: string;
+  /** Single recipient (back-compat) OR multi: takes `string` or
+   * `string[]`. CC list is separate. */
+  to: string | string[];
+  cc?: string[];
   reply_to?: string;
   subject: string;
   text: string;
@@ -36,19 +39,23 @@ export async function sendEmail(env: CloudflareEnv, input: EmailInput): Promise<
   if (!env.BREVO_API_KEY || !env.BREVO_FROM_EMAIL) {
     return { ok: false, kind: 'unconfigured', message: 'Brevo not configured' };
   }
-  if (!input.to.includes('@')) {
-    return { ok: false, kind: 'invalid_input', message: `Invalid recipient: ${input.to}` };
+  const toList = Array.isArray(input.to) ? input.to : [input.to];
+  const validTo = toList.filter((e) => typeof e === 'string' && e.includes('@'));
+  if (validTo.length === 0) {
+    return { ok: false, kind: 'invalid_input', message: `No valid recipients: ${toList.join(', ')}` };
   }
+  const validCc = (input.cc ?? []).filter((e) => typeof e === 'string' && e.includes('@'));
 
   const sender: Record<string, string> = { email: env.BREVO_FROM_EMAIL };
   if (env.BREVO_FROM_NAME) sender.name = env.BREVO_FROM_NAME;
 
   const payload: Record<string, unknown> = {
     sender,
-    to: [{ email: input.to }],
+    to: validTo.map((email) => ({ email })),
     subject: input.subject,
     textContent: input.text,
   };
+  if (validCc.length > 0) payload.cc = validCc.map((email) => ({ email }));
   if (input.html) payload.htmlContent = input.html;
   if (input.reply_to) {
     payload.replyTo = { email: input.reply_to };
