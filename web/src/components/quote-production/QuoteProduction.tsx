@@ -16,6 +16,8 @@ import Stepper from '@/components/ui/Stepper';
 import Pill from '@/components/ui/Pill';
 import OfferPanel from '@/components/quote-production/OfferPanel';
 import CoverNotePanel from '@/components/quote-production/CoverNotePanel';
+import PhasesEditor, { type Phase } from '@/components/quote-production/PhasesEditor';
+import RfiNotice from '@/components/quote-production/RfiNotice';
 
 interface ShopContext {
   legal_name: string;
@@ -77,6 +79,20 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   const [scanError, setScanError] = createSignal<string | null>(null);
   const [scanning, setScanning] = createSignal(false);
 
+  // Proposal classification (migration 009). Defaults to project_quote
+  // so contractor quotes feel unchanged; scan emits a proposal_style
+  // event early when the doc looks like consulting / partnership / RFI.
+  const [proposalStyle, setProposalStyle] = createSignal<
+    'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown'
+  >('project_quote');
+  const [proposalConfidence, setProposalConfidence] = createSignal(1);
+  const [programType, setProgramType] = createSignal<'one_off' | 'recurring' | 'rebate' | null>(null);
+  const [termMonths, setTermMonths] = createSignal<number | null>(null);
+  const [phases, setPhases] = createSignal<Array<{ name: string; deliverables: string[]; duration?: string | null }>>([]);
+  const [rebateTerms, setRebateTerms] = createSignal<Array<{ product: string; rebate: string; basis: string }>>([]);
+  const [rfiRequirements, setRfiRequirements] = createSignal<string[]>([]);
+  const [rfiQuestions, setRfiQuestions] = createSignal<string[]>([]);
+
   // Pricing
   const [markupPct, setMarkupPct] = createSignal<number>(props.shop.default_markup_pct ?? 32);
 
@@ -111,6 +127,15 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
     setScanProgress(0);
     setScanError(null);
     setScanning(true);
+    // Reset proposal classification state for each run.
+    setProposalStyle('project_quote');
+    setProposalConfidence(1);
+    setProgramType(null);
+    setTermMonths(null);
+    setPhases([]);
+    setRebateTerms([]);
+    setRfiRequirements([]);
+    setRfiQuestions([]);
     try {
       const resp = await fetch('/api/quote/scan', {
         method: 'POST',
@@ -136,7 +161,17 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           if (!dataLine) continue;
           const payload = JSON.parse(dataLine.slice(6));
           if (payload.type === 'progress') setScanProgress(payload.percent);
+          else if (payload.type === 'proposal_style') {
+            setProposalStyle(payload.payload?.style ?? 'project_quote');
+            setProposalConfidence(payload.payload?.confidence ?? 1);
+            setProgramType(payload.payload?.program_type ?? null);
+            setTermMonths(payload.payload?.term_months ?? null);
+          }
           else if (payload.type === 'line_item') setLineItems([...lineItems(), payload.payload]);
+          else if (payload.type === 'phase')     setPhases([...phases(), payload.payload]);
+          else if (payload.type === 'rebate_term') setRebateTerms([...rebateTerms(), payload.payload]);
+          else if (payload.type === 'requirement') setRfiRequirements([...rfiRequirements(), payload.payload?.text ?? '']);
+          else if (payload.type === 'question')    setRfiQuestions([...rfiQuestions(), payload.payload?.text ?? '']);
           else if (payload.type === 'flag')      setFlags([...flags(), payload.payload]);
           else if (payload.type === 'done')      setScopeSummary(payload.payload?.scope_summary ?? '');
           else if (payload.type === 'error')     setScanError(payload.message);
@@ -247,6 +282,10 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           total: total(),
           margin_pct: markupPct(),
           line_items: lineItems(),
+          proposal_style: proposalStyle(),
+          program_type: programType(),
+          term_months: termMonths(),
+          phases: phases().length > 0 ? phases() : null,
         }),
       });
       if (!saveResp.ok) throw new Error(`Save failed: ${await saveResp.text()}`);
@@ -305,6 +344,14 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           lineItems={lineItems}
           flags={flags}
           scopeSummary={scopeSummary}
+          proposalStyle={proposalStyle}
+          proposalConfidence={proposalConfidence}
+          phases={phases}
+          setPhases={setPhases}
+          rebateTerms={rebateTerms}
+          rfiRequirements={rfiRequirements}
+          rfiQuestions={rfiQuestions}
+          termMonths={termMonths}
           onRetry={startScan}
           onBack={() => setStepIdx(0)}
           onContinue={() => setStepIdx(2)}
@@ -893,21 +940,69 @@ function ScopeStep(p: {
   lineItems: () => LineItem[];
   flags: () => Flag[];
   scopeSummary: () => string;
+  proposalStyle: () => 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown';
+  proposalConfidence: () => number;
+  phases: () => Phase[];
+  setPhases: (p: Phase[]) => void;
+  rebateTerms: () => Array<{ product: string; rebate: string; basis: string }>;
+  rfiRequirements: () => string[];
+  rfiQuestions: () => string[];
+  termMonths: () => number | null;
   onRetry: () => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
+  const styleLabel = () => {
+    switch (p.proposalStyle()) {
+      case 'partnership':
+        return 'Partnership pitch';
+      case 'consulting':
+        return 'Consulting proposal';
+      case 'rfi_received':
+        return 'Inbound RFI';
+      case 'unknown':
+        return 'Unknown style';
+      default:
+        return 'Project quote';
+    }
+  };
+  const isNarrative = () =>
+    p.proposalStyle() === 'consulting' || p.proposalStyle() === 'partnership';
+
+  const updatePhase = (idx: number, patch: Partial<Phase>) => {
+    const next = p.phases().slice();
+    next[idx] = { ...next[idx], ...patch };
+    p.setPhases(next);
+  };
+  const addPhase = () => {
+    p.setPhases([...p.phases(), { name: '', deliverables: [], duration: null }]);
+  };
+  const removePhase = (idx: number) => {
+    p.setPhases(p.phases().filter((_, i) => i !== idx));
+  };
+
   return (
     <div>
       {/* Header — eyebrow + serif H1 + big % readout right-aligned
           (matches design/mockups/01-agenda-default.png). */}
       <div class="flex items-start gap-6">
         <div class="flex-1 min-w-0">
-          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-            Brief is reading the scope
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] flex items-center gap-2">
+            <span>Brief is reading the scope</span>
+            <Show when={!p.scanning() && p.proposalStyle() !== 'project_quote'}>
+              <span class="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm bg-[color:var(--color-accent-tint,#fbe9d4)] text-[color:var(--color-accent,#a85432)] text-[10.5px] font-medium uppercase">
+                Detected: {styleLabel()}
+              </span>
+            </Show>
           </div>
           <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight tracking-tight">
-            Picking out the line items.
+            {p.proposalStyle() === 'consulting'
+              ? 'Mapping out the phases.'
+              : p.proposalStyle() === 'partnership'
+                ? 'Pulling the rebate terms.'
+                : p.proposalStyle() === 'rfi_received'
+                  ? 'Reading what they’re asking for.'
+                  : 'Picking out the line items.'}
           </h1>
         </div>
         <div class="font-serif text-[36px] font-medium tabular-nums leading-none text-[color:var(--color-ink)]">
@@ -938,6 +1033,17 @@ function ScopeStep(p: {
         <ScanTaskList progress={p.progress} lineItemCount={() => p.lineItems().length} />
       </Show>
 
+      <Show when={!p.scanning() && p.proposalStyle() === 'rfi_received'}>
+        <div class="mt-6">
+          <RfiNotice
+            confidence={p.proposalConfidence}
+            requirements={p.rfiRequirements}
+            questions={p.rfiQuestions}
+            onBack={p.onBack}
+          />
+        </div>
+      </Show>
+
       <Show when={p.flags().length > 0}>
         <div class="mt-6 space-y-2">
           <For each={p.flags()}>
@@ -954,6 +1060,43 @@ function ScopeStep(p: {
               </div>
             )}
           </For>
+        </div>
+      </Show>
+
+      <Show when={!p.scanning() && (isNarrative() || p.phases().length > 0)}>
+        <div class="mt-6">
+          <PhasesEditor
+            phases={p.phases}
+            onUpdate={updatePhase}
+            onAdd={addPhase}
+            onRemove={removePhase}
+          />
+        </div>
+      </Show>
+
+      <Show when={!p.scanning() && p.proposalStyle() === 'partnership' && p.rebateTerms().length > 0}>
+        <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
+          <div class="px-4 py-3 border-b border-[color:var(--color-line)] flex justify-between items-baseline">
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
+              Rebate terms
+            </div>
+            <Show when={p.termMonths()}>
+              <span class="text-[11px] font-mono text-[color:var(--color-muted-2)]">
+                {p.termMonths()} month term
+              </span>
+            </Show>
+          </div>
+          <ul class="divide-y divide-[color:var(--color-line)]">
+            <For each={p.rebateTerms()}>
+              {(rt) => (
+                <li class="px-4 py-3 grid grid-cols-[1fr_120px_1fr] gap-3 text-sm">
+                  <div class="font-medium">{rt.product}</div>
+                  <div class="font-mono tabular-nums text-right">{rt.rebate}</div>
+                  <div class="text-[color:var(--color-muted)] text-[12.5px]">{rt.basis}</div>
+                </li>
+              )}
+            </For>
+          </ul>
         </div>
       </Show>
 
@@ -995,12 +1138,16 @@ function ScopeStep(p: {
       <div class="mt-6 flex items-center justify-between">
         <Button variant="ghost" onClick={p.onBack}>← Back</Button>
         {/* Gated only on the scan still running. Zero-item scans
-            still let the operator advance — Pricing step has an
-            "Add line" UI that can recover from a thin extract. */}
+            still let the operator advance — Pricing step (or the
+            phases editor) can recover from a thin extract. */}
         <Button variant="accent" disabled={p.scanning()} onClick={p.onContinue}>
-          {p.lineItems().length === 0 && !p.scanning()
-            ? 'Continue (add lines manually) →'
-            : 'Continue to pricing →'}
+          {p.scanning()
+            ? 'Scanning…'
+            : p.lineItems().length === 0 && p.phases().length === 0
+              ? 'Continue (add detail manually) →'
+              : isNarrative()
+                ? 'Continue to pricing →'
+                : 'Continue to pricing →'}
         </Button>
       </div>
     </div>

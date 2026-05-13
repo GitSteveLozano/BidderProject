@@ -29,10 +29,10 @@ import { generateText, extractJson } from './ai';
 import type { CloudflareEnv } from './supabase';
 
 export type Classification =
-  | 'itemized_project_quote'
-  | 'templated_partnership_pitch'
-  | 'narrative_consulting_proposal'
-  | 'inbound_rfi'
+  | 'project_quote'
+  | 'partnership'
+  | 'consulting'
+  | 'rfi_received'
   | 'change_request'
   | 'unknown';
 
@@ -314,13 +314,13 @@ export function decideRoute(extract: IntakeExtract): RouteDecision {
 
 function flowFor(c: Classification): RouteDecision['recommended_flow'] {
   switch (c) {
-    case 'itemized_project_quote':
+    case 'project_quote':
       return 'quote_production';
-    case 'templated_partnership_pitch':
+    case 'partnership':
       return 'partnership_editor';
-    case 'narrative_consulting_proposal':
+    case 'consulting':
       return 'consulting_editor';
-    case 'inbound_rfi':
+    case 'rfi_received':
       return 'rfi_response_helper';
     case 'change_request':
       return 'change_order_editor';
@@ -331,10 +331,10 @@ function flowFor(c: Classification): RouteDecision['recommended_flow'] {
 
 function isClassification(v: unknown): v is Classification {
   return (
-    v === 'itemized_project_quote' ||
-    v === 'templated_partnership_pitch' ||
-    v === 'narrative_consulting_proposal' ||
-    v === 'inbound_rfi' ||
+    v === 'project_quote' ||
+    v === 'partnership' ||
+    v === 'consulting' ||
+    v === 'rfi_received' ||
     v === 'change_request' ||
     v === 'unknown'
   );
