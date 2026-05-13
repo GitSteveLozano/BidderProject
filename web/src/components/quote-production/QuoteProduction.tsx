@@ -501,15 +501,51 @@ function IntakeStep(p: {
 }) {
   // Apply auto-extracted metadata (from PDF or voice) to the form.
   // Only writes empty fields — never clobbers what the operator typed.
-  const applyMetadata = (m: (IntakeMetadata & { contact_email?: string | null; contact_phone?: string | null }) | null) => {
-    if (!m) return;
-    if (m.client_name && !p.clientName().trim()) p.setClientName(m.client_name);
-    if (m.contact_name && !p.clientContact().trim()) p.setClientContact(m.contact_name);
-    if (m.contact_email && !p.clientContactEmail().trim()) p.setClientContactEmail(m.contact_email);
-    if (m.contact_phone && !p.clientContactPhone().trim()) p.setClientContactPhone(m.contact_phone);
-    if (m.project_title && !p.projectTitle().trim()) p.setProjectTitle(m.project_title);
-    if (m.project_address && !p.projectAddress().trim()) p.setProjectAddress(m.project_address);
+  // Returns the human-readable labels of fields that were actually
+  // filled so the UI can surface a "Brief filled in X" notice.
+  const applyMetadata = (
+    m: (IntakeMetadata & { contact_email?: string | null; contact_phone?: string | null }) | null,
+  ): string[] => {
+    if (!m) return [];
+    const filled: string[] = [];
+    if (m.client_name && !p.clientName().trim()) {
+      p.setClientName(m.client_name);
+      filled.push('client');
+    }
+    if (m.contact_name && !p.clientContact().trim()) {
+      p.setClientContact(m.contact_name);
+      filled.push('contact name');
+    }
+    if (m.contact_email && !p.clientContactEmail().trim()) {
+      p.setClientContactEmail(m.contact_email);
+      filled.push('email');
+    }
+    if (m.contact_phone && !p.clientContactPhone().trim()) {
+      p.setClientContactPhone(m.contact_phone);
+      filled.push('phone');
+    }
+    if (m.project_title && !p.projectTitle().trim()) {
+      p.setProjectTitle(m.project_title);
+      filled.push('project title');
+    }
+    if (m.project_address && !p.projectAddress().trim()) {
+      p.setProjectAddress(m.project_address);
+      filled.push('address');
+    }
+    if (filled.length > 0) {
+      setAutofillNote(filled);
+      // Auto-dismiss after 8 seconds so the notice doesn't get stale.
+      setTimeout(() => setAutofillNote(null), 8000);
+    } else if (m) {
+      // Source-uploaded but nothing matched — let the operator know
+      // so they don't sit waiting for fields to fill that won't.
+      setAutofillNote([]);
+      setTimeout(() => setAutofillNote(null), 8000);
+    }
+    return filled;
   };
+
+  const [autofillNote, setAutofillNote] = createSignal<string[] | null>(null);
 
   // What's still keeping the operator from advancing. Surfacing this
   // next to the disabled button — otherwise it just looks broken when
@@ -571,6 +607,30 @@ function IntakeStep(p: {
         <PdfIntake setScopeText={p.setScopeText} applyMetadata={applyMetadata} />
         <VoiceIntake setScopeText={p.setScopeText} applyMetadata={applyMetadata} />
       </div>
+
+      <Show when={autofillNote()}>
+        {(fields) => (
+          <div class="mt-3 rounded-lg border border-[color:var(--color-line)] bg-[color:var(--color-accent-tint,#fbe9d4)] px-3.5 py-2.5 flex items-start gap-2.5">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" class="text-[color:var(--color-accent)] mt-0.5 shrink-0" aria-hidden="true">
+              <path d="M2.5 7l3 3 6-6.5" />
+            </svg>
+            <div class="text-[12.5px] leading-snug">
+              <Show
+                when={fields().length > 0}
+                fallback={
+                  <span class="text-[color:var(--color-ink-2)]">
+                    Brief read the source but couldn't auto-fill — type the client and project below.
+                  </span>
+                }
+              >
+                <span class="font-medium">Brief filled in</span>{' '}
+                <span class="text-[color:var(--color-ink-2)]">{fields().join(' · ')}</span>
+                <span class="text-[color:var(--color-muted)]">. Edit anything that's wrong.</span>
+              </Show>
+            </div>
+          </div>
+        )}
+      </Show>
 
       {/* Scope textarea — primary input, always visible. */}
       <div class="mt-4">
