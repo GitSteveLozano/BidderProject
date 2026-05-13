@@ -18,6 +18,8 @@ import { generateText, extractJson } from './ai';
 export interface IntakeMetadata {
   client_name: string | null;
   contact_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
   project_title: string | null;
   project_address: string | null;
 }
@@ -25,18 +27,22 @@ export interface IntakeMetadata {
 const EMPTY: IntakeMetadata = {
   client_name: null,
   contact_name: null,
+  contact_email: null,
+  contact_phone: null,
   project_title: null,
   project_address: null,
 };
 
 const SYSTEM = `You read a construction-scope document (RFP, client email, or
-walk-through transcript) and extract the four fields below. Return ONLY a
+walk-through transcript) and extract the six fields below. Return ONLY a
 JSON object of the exact shape — no fences, no preamble, no closing.
 
 {
-  "client_name":   string | null,
-  "contact_name":  string | null,
-  "project_title": string | null,
+  "client_name":     string | null,
+  "contact_name":    string | null,
+  "contact_email":   string | null,
+  "contact_phone":   string | null,
+  "project_title":   string | null,
   "project_address": string | null
 }
 
@@ -45,6 +51,9 @@ Rules:
   If it's a builder/GC, use the company name (not the project owner).
 - contact_name: the specific person at the client side, if named.
   Different from client_name when client_name is a company.
+- contact_email: their email address if it appears in the source.
+- contact_phone: their phone number if it appears. E.164 if possible
+  (+15551234567); otherwise return what you see.
 - project_title: short title for the work itself ("Two-story addition",
   "Stucco repair — west wall"). Not the address. Not boilerplate
   ("Scope of Work", "Proposal").
@@ -77,6 +86,8 @@ export async function extractIntakeMetadata(
     return {
       client_name: clean(parsed.client_name),
       contact_name: clean(parsed.contact_name),
+      contact_email: clean(parsed.contact_email),
+      contact_phone: clean(parsed.contact_phone),
       project_title: clean(parsed.project_title),
       project_address: clean(parsed.project_address),
     };

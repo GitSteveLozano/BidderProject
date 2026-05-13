@@ -61,6 +61,8 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   // Intake
   const [clientName, setClientName] = createSignal('');
   const [clientContact, setClientContact] = createSignal('');
+  const [clientContactEmail, setClientContactEmail] = createSignal('');
+  const [clientContactPhone, setClientContactPhone] = createSignal('');
   const [projectTitle, setProjectTitle] = createSignal('');
   const [projectAddress, setProjectAddress] = createSignal('');
   const [scopeText, setScopeText] = createSignal('');
@@ -234,6 +236,8 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           id: quoteId() ?? undefined,
           client_name: clientName(),
           client_contact_name: clientContact() || null,
+          client_contact_email: clientContactEmail().trim() || null,
+          client_contact_phone: clientContactPhone().trim() || null,
           project_title: projectTitle(),
           project_address: projectAddress() || null,
           scope_summary: scopeSummary(),
@@ -248,11 +252,13 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
       setQuoteId(saved.id);
       setQuoteRef(saved.ref);
 
-      // Send
+      // Send. If the operator gave us an email, hand off to Brevo via
+      // channel='email'; otherwise just mark sent without delivery.
+      const channel = clientContactEmail().trim() ? 'email' : 'manual';
       const sendResp = await fetch('/api/quote/send', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ quote_id: saved.id, channel: 'manual' }),
+        body: JSON.stringify({ quote_id: saved.id, channel }),
       });
       if (!sendResp.ok) throw new Error(`Send failed: ${await sendResp.text()}`);
       setStepIdx(4);
@@ -279,6 +285,8 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
         <IntakeStep
           clientName={clientName} setClientName={setClientName}
           clientContact={clientContact} setClientContact={setClientContact}
+          clientContactEmail={clientContactEmail} setClientContactEmail={setClientContactEmail}
+          clientContactPhone={clientContactPhone} setClientContactPhone={setClientContactPhone}
           projectTitle={projectTitle} setProjectTitle={setProjectTitle}
           projectAddress={projectAddress} setProjectAddress={setProjectAddress}
           scopeText={scopeText} setScopeText={setScopeText}
@@ -329,6 +337,8 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           lineItems={lineItems}
           clientName={clientName}
           clientContact={clientContact}
+          clientContactEmail={clientContactEmail}
+          clientContactPhone={clientContactPhone}
           projectTitle={projectTitle}
           projectAddress={projectAddress}
           shop={props.shop}
@@ -358,6 +368,8 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
 function IntakeStep(p: {
   clientName: () => string; setClientName: (v: string) => void;
   clientContact: () => string; setClientContact: (v: string) => void;
+  clientContactEmail: () => string; setClientContactEmail: (v: string) => void;
+  clientContactPhone: () => string; setClientContactPhone: (v: string) => void;
   projectTitle: () => string; setProjectTitle: (v: string) => void;
   projectAddress: () => string; setProjectAddress: (v: string) => void;
   scopeText: () => string; setScopeText: (v: string) => void;
@@ -366,10 +378,12 @@ function IntakeStep(p: {
 }) {
   // Apply auto-extracted metadata (from PDF or voice) to the form.
   // Only writes empty fields — never clobbers what the operator typed.
-  const applyMetadata = (m: IntakeMetadata | null) => {
+  const applyMetadata = (m: (IntakeMetadata & { contact_email?: string | null; contact_phone?: string | null }) | null) => {
     if (!m) return;
     if (m.client_name && !p.clientName().trim()) p.setClientName(m.client_name);
     if (m.contact_name && !p.clientContact().trim()) p.setClientContact(m.contact_name);
+    if (m.contact_email && !p.clientContactEmail().trim()) p.setClientContactEmail(m.contact_email);
+    if (m.contact_phone && !p.clientContactPhone().trim()) p.setClientContactPhone(m.contact_phone);
     if (m.project_title && !p.projectTitle().trim()) p.setProjectTitle(m.project_title);
     if (m.project_address && !p.projectAddress().trim()) p.setProjectAddress(m.project_address);
   };
@@ -384,13 +398,31 @@ function IntakeStep(p: {
         Brief reads what you give it and builds the line items.
       </p>
 
-      {/* Client + project — same fields as before, two-column. */}
+      {/* Client + project. Email + phone are how Brief actually
+          delivers — without one of them the quote saves but doesn't
+          send. Surface that on the Review step so the operator can
+          spot it before hitting send. */}
       <div class="mt-7 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Field label="Client name">
           <Input value={p.clientName()} onInput={(e) => p.setClientName(e.currentTarget.value)} />
         </Field>
-        <Field label="Contact (optional)">
+        <Field label="Contact name (optional)">
           <Input value={p.clientContact()} onInput={(e) => p.setClientContact(e.currentTarget.value)} />
+        </Field>
+        <Field label="Contact email" helper="Where the quote gets sent.">
+          <Input
+            type="email"
+            value={p.clientContactEmail()}
+            onInput={(e) => p.setClientContactEmail(e.currentTarget.value)}
+            placeholder="diane@halsted.com"
+          />
+        </Field>
+        <Field label="Contact phone (optional)" helper="For SMS reminders.">
+          <Input
+            value={p.clientContactPhone()}
+            onInput={(e) => p.setClientContactPhone(e.currentTarget.value)}
+            placeholder="+1…"
+          />
         </Field>
         <Field label="Project title">
           <Input value={p.projectTitle()} onInput={(e) => p.setProjectTitle(e.currentTarget.value)} />
@@ -1109,6 +1141,8 @@ function ReviewStep(p: {
   lineItems: () => LineItem[];
   clientName: () => string;
   clientContact: () => string;
+  clientContactEmail: () => string;
+  clientContactPhone: () => string;
   projectTitle: () => string;
   projectAddress: () => string;
   shop: ShopContext;
@@ -1148,9 +1182,13 @@ function ReviewStep(p: {
         sub: !p.projectAddress().trim() ? 'Optional, but most signers expect it.' : undefined,
       },
       {
-        ok: !!p.clientContact().trim() || !!p.clientName().trim(),
-        label: 'Recipient set',
-        sub: undefined,
+        ok: !!p.clientContactEmail().trim(),
+        label: p.clientContactEmail().trim()
+          ? `Sending to ${p.clientContactEmail().trim()}`
+          : 'No email — quote will save without delivery',
+        sub: !p.clientContactEmail().trim()
+          ? 'Add a contact email on Intake (or to the client later) for Brief to deliver this.'
+          : undefined,
       },
     ];
   });
@@ -1186,6 +1224,66 @@ function ReviewStep(p: {
         </div>
 
         <aside class="space-y-4">
+          {/* Sending to — answers "where is this quote going?" */}
+          <div
+            class={[
+              'rounded-xl border p-5',
+              p.clientContactEmail().trim()
+                ? 'border-[color:var(--color-line)] bg-[color:var(--color-surface)]'
+                : 'border-[color:var(--color-warn)] bg-[color:var(--color-warn-tint)]',
+            ].join(' ')}
+          >
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
+              Sending to
+            </div>
+            <Show
+              when={p.clientContactEmail().trim()}
+              fallback={
+                <div>
+                  <p class="text-[14px] font-medium text-[color:var(--color-warn)] leading-snug">
+                    No email on file.
+                  </p>
+                  <p class="mt-1.5 text-[12.5px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
+                    Brief will save this quote as sent but won't deliver. Add a
+                    contact email on the Intake step, or send the PDF manually
+                    after saving.
+                  </p>
+                  <a
+                    href="#intake"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      p.onBack();
+                      // Back to pricing, operator clicks back again to Intake.
+                      // We don't have a "jump to intake" in the wizard yet —
+                      // the Back button is the path.
+                    }}
+                    class="mt-2 inline-block text-[12px] underline text-[color:var(--color-warn)] hover:brightness-90"
+                  >
+                    ← Back to fix that
+                  </a>
+                </div>
+              }
+            >
+              <div class="space-y-2">
+                <div class="text-[14px] leading-snug">
+                  <div class="font-medium">{p.clientContact() || p.clientName()}</div>
+                  <div class="font-mono text-[12.5px] text-[color:var(--color-accent)]">
+                    {p.clientContactEmail()}
+                  </div>
+                </div>
+                <Show when={p.clientContactPhone().trim()}>
+                  <div class="text-[12.5px] font-mono text-[color:var(--color-muted)]">
+                    + SMS to {p.clientContactPhone()}
+                  </div>
+                </Show>
+                <p class="text-[11.5px] italic font-serif text-[color:var(--color-muted)] pt-1.5 border-t border-[color:var(--color-line)] leading-relaxed">
+                  Any always-notify contacts on this client will also receive a
+                  copy. Manage them on the client page.
+                </p>
+              </div>
+            </Show>
+          </div>
+
           {/* Final price card */}
           <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
             <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">Final price</div>
