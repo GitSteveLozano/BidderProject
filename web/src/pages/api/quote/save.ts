@@ -36,6 +36,7 @@ interface SaveBody {
     category?: string;
     confidence?: string;
     source_excerpt?: string;
+    margin_pct?: number | null;
   }>;
 }
 
@@ -145,6 +146,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
       category: li.category ?? null,
       confidence: li.confidence ?? null,
       source_excerpt: li.source_excerpt ?? null,
+      margin_pct: li.margin_pct ?? null,
     }));
     const { error: liErr } = await svc.from('quote_line_items').insert(rows);
     if (liErr) return json({ error: liErr.message }, 500);

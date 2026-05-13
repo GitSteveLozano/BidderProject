@@ -25,7 +25,7 @@ const svc = supabaseService(env, 'service');
 const { data: quote } = await svc
   .from('quotes')
   .select(
-    'id, ref, state, client_name, client_contact_name, project_title, project_address, scope_summary, total, margin_pct, sent_at, shop_id, quote_line_items(id, position, description, qty, unit, unit_price, subtotal)',
+    'id, ref, state, client_name, client_contact_name, project_title, project_address, scope_summary, total, margin_pct, sent_at, shop_id, quote_line_items(id, position, description, qty, unit, unit_price, subtotal, margin_pct)',
   )
   .eq('id', id)
   .neq('state', 'DRAFT')
@@ -284,14 +284,19 @@ const sentDate = quote.sent_at
             </tr>
           </thead>
           <tbody>
-            {lineItems.map((li: any) => (
-              <tr>
-                <td>{li.description}</td>
-                <td class="num">{Number(li.qty).toLocaleString()}</td>
-                <td class="num">{li.unit ?? ''}</td>
-                <td class="num">{fmtCurrencyFull(Number(li.subtotal))}</td>
-              </tr>
-            ))}
+            {lineItems.map((li: any) => {
+              const quoteMargin = quote.margin_pct != null ? Number(quote.margin_pct) : 0;
+              const effective = li.margin_pct != null ? Number(li.margin_pct) : quoteMargin;
+              const lineTotal = Number(li.subtotal) * (1 + effective / 100);
+              return (
+                <tr>
+                  <td>{li.description}</td>
+                  <td class="num">{Number(li.qty).toLocaleString()}</td>
+                  <td class="num">{li.unit ?? ''}</td>
+                  <td class="num">{fmtCurrencyFull(lineTotal)}</td>
+                </tr>
+              );
+            })}
             <tr class="total">
               <td colspan="3">Total</td>
               <td class="num amount">{fmtCurrencyFull(Number(quote.total))}</td>

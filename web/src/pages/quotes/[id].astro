@@ -194,9 +194,11 @@ const eventLabels: Record<string, string> = {
             subtotal: Number(li.subtotal),
             category: li.category,
             confidence: li.confidence,
+            margin_pct: li.margin_pct != null ? Number(li.margin_pct) : null,
           }))}
           editable={quote.state === 'DRAFT'}
           total={Number(quote.total)}
+          quote_margin_pct={quote.margin_pct != null ? Number(quote.margin_pct) : 0}
         />
       </div>
     </div>
