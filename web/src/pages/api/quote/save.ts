@@ -33,10 +33,15 @@ interface SaveBody {
   // For project_quote (default), these may be null. For partnership,
   // term_months + program_type='rebate' are typical. For consulting,
   // phases[] is the primary editable structure.
-  proposal_style?: 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown' | null;
+  proposal_style?: 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'novel' | 'unknown' | null;
   program_type?: 'one_off' | 'recurring' | 'rebate' | null;
   term_months?: number | null;
   phases?: Array<{ name: string; deliverables: string[]; duration?: string | null; fee?: number | null }> | null;
+  /** Novel-path output. shape_id points at proposal_shapes when the
+   * operator's layout came from / matched a saved shape; sections_data
+   * is the operator-edited content for each section. */
+  shape_id?: string | null;
+  sections_data?: Array<Record<string, unknown>> | null;
   rfi_response?: {
     requirements_answered?: Array<{ requirement: string; response: string }>;
     questions_answered?: Array<{ question: string; answer: string }>;
@@ -152,6 +157,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
     term_months: body.term_months ?? null,
     phases: body.phases && body.phases.length > 0 ? body.phases : null,
     rfi_response: body.rfi_response ?? null,
+    shape_id: body.shape_id ?? null,
+    sections_data: body.sections_data && body.sections_data.length > 0 ? body.sections_data : null,
   };
 
   let quoteId: string;
