@@ -47,6 +47,16 @@ interface RebateTerm {
   basis: string;
 }
 
+interface SectionData {
+  kind: 'text' | 'bullets' | 'kv_table';
+  key?: string;
+  label?: string;
+  body?: string;
+  items?: string[];
+  headers?: string[];
+  rows?: Array<Record<string, string>>;
+}
+
 interface BidBody {
   ref?: string;
   date?: string;
@@ -60,7 +70,13 @@ interface BidBody {
    * + rebate_terms in place of the line-items table. */
   phases?: Phase[] | null;
   rebate_terms?: RebateTerm[] | null;
-  proposal_style?: 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown' | null;
+  /** Novel-shape proposals (5th wizard path) render sections_data —
+   * the operator-edited content for each section of their chosen
+   * layout. Takes precedence over phases/rebate/line_items when
+   * present. */
+  sections_data?: SectionData[] | null;
+  shape_name?: string | null;
+  proposal_style?: 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'novel' | 'unknown' | null;
   program_type?: 'one_off' | 'recurring' | 'rebate' | null;
   term_months?: number | null;
   total: number;
@@ -118,6 +134,60 @@ function esc(s: unknown): string {
  */
 function renderBody(b: BidBody): string {
   const sections: string[] = [];
+
+  // Novel-path sections take precedence. When the operator picked a
+  // freeform shape, it's the authoritative layout — render only
+  // those sections and skip the legacy line_items / phases / rebate
+  // tables below.
+  if (b.sections_data && b.sections_data.length > 0) {
+    for (const s of b.sections_data) {
+      const label = typeof s.label === 'string' ? s.label : '';
+      if (!label) continue;
+      if (s.kind === 'text') {
+        const body = (s.body ?? '').trim();
+        if (!body) continue;
+        sections.push(
+          `<h2>${esc(label)}</h2><p class="scope-body" style="white-space:pre-wrap">${esc(body)}</p>`,
+        );
+      } else if (s.kind === 'bullets') {
+        const items = Array.isArray(s.items) ? s.items.filter((i) => i.trim().length > 0) : [];
+        if (items.length === 0) continue;
+        sections.push(
+          `<h2>${esc(label)}</h2><ul style="margin:0 0 16px 18px;padding:0;line-height:1.55">${items
+            .map((i) => `<li>${esc(i)}</li>`)
+            .join('')}</ul>`,
+        );
+      } else if (s.kind === 'kv_table') {
+        const headers = Array.isArray(s.headers) ? s.headers : [];
+        const rows = Array.isArray(s.rows) ? s.rows : [];
+        if (headers.length === 0 || rows.length === 0) continue;
+        sections.push(`
+          <h2>${esc(label)}</h2>
+          <table>
+            <thead>
+              <tr>${headers.map((h, i) => `<th${i > 0 ? ' class="num"' : ''}>${esc(h)}</th>`).join('')}</tr>
+            </thead>
+            <tbody>
+              ${rows
+                .map(
+                  (r) =>
+                    `<tr>${headers
+                      .map(
+                        (h, i) =>
+                          `<td${i > 0 ? ' class="num"' : ''}>${esc(r[h] ?? '')}</td>`,
+                      )
+                      .join('')}</tr>`,
+                )
+                .join('')}
+            </tbody>
+          </table>`);
+      }
+    }
+    if (sections.length > 0) return sections.join('\n');
+    // Sections present but all empty — fall through to legacy
+    // tables (probably nothing there either) and we'll show the
+    // soft-empty note at the bottom.
+  }
 
   if (b.phases && b.phases.length > 0) {
     const rows = b.phases
@@ -225,6 +295,16 @@ function renderBody(b: BidBody): string {
     </p>`;
   }
   return sections.join('\n');
+}
+
+/** Hide the bottom "Total: $X" line when the doc legitimately has no
+ * total (rebate-only partnership, narrative consulting with no fees,
+ * novel layouts with zero $). Project quotes always show it. */
+function shouldShowTotal(b: BidBody): boolean {
+  if (b.total > 0) return true;
+  // total === 0
+  if (b.proposal_style === 'project_quote' || b.proposal_style == null) return true;
+  return false;
 }
 
 function renderBid(b: BidBody): string {
@@ -405,10 +485,12 @@ function renderBid(b: BidBody): string {
 
       ${renderBody(b)}
 
-      <div class="totals">
-        <span class="total-label">Total</span>
-        <span class="total-value">${fmt(b.total)}</span>
-      </div>
+      ${shouldShowTotal(b)
+        ? `<div class="totals">
+             <span class="total-label">Total</span>
+             <span class="total-value">${fmt(b.total)}</span>
+           </div>`
+        : ''}
 
       ${shop.boilerplate_closing ? `<p class="boilerplate">${esc(shop.boilerplate_closing)}</p>` : ''}
 

@@ -20,6 +20,10 @@ import PhasesEditor, { type Phase } from '@/components/quote-production/PhasesEd
 import PhasePricingEditor from '@/components/quote-production/PhasePricingEditor';
 import RfiNotice from '@/components/quote-production/RfiNotice';
 import RfiResponseEditor, { type RfiResponseShape } from '@/components/quote-production/RfiResponseEditor';
+import NovelShapeConfirmCard from '@/components/quote-production/NovelShapeConfirmCard';
+import FreeformEditor from '@/components/quote-production/FreeformEditor';
+import type { Section, Shape } from '@/lib/shape';
+import { countPopulated } from '@/lib/shape';
 
 interface ShopContext {
   legal_name: string;
@@ -94,6 +98,21 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   const [rebateTerms, setRebateTerms] = createSignal<Array<{ product: string; rebate: string; basis: string }>>([]);
   const [rfiRequirements, setRfiRequirements] = createSignal<string[]>([]);
   const [rfiQuestions, setRfiQuestions] = createSignal<string[]>([]);
+  // Novel-shape (5th wizard path) — when scan confidence is low or
+  // proposal_style is 'unknown', we run /api/shape/propose and let
+  // the operator confirm a freeform layout in one click. Sections
+  // arrive pre-populated from the source doc.
+  const [novelShape, setNovelShape] = createSignal<Shape | null>(null);
+  const [novelShapeSource, setNovelShapeSource] = createSignal<'matched' | 'proposed' | null>(null);
+  const [novelShapeId, setNovelShapeId] = createSignal<string | null>(null);
+  const [novelMatchDistance, setNovelMatchDistance] = createSignal<number | null>(null);
+  const [novelAccepted, setNovelAccepted] = createSignal(false);
+  const [sectionsData, setSectionsData] = createSignal<Section[]>([]);
+  const [proposingShape, setProposingShape] = createSignal(false);
+  const [proposeShapeError, setProposeShapeError] = createSignal<string | null>(null);
+  const isNovelStyle = () =>
+    proposalStyle() === 'unknown' || (proposalConfidence() < 0.6 && novelShape() != null);
+
   const [rfiResponse, setRfiResponse] = createSignal<RfiResponseShape>({
     requirements_answered: [],
     questions_answered: [],
@@ -163,6 +182,13 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
     setRebateTerms([]);
     setRfiRequirements([]);
     setRfiQuestions([]);
+    setNovelShape(null);
+    setNovelShapeSource(null);
+    setNovelShapeId(null);
+    setNovelMatchDistance(null);
+    setNovelAccepted(false);
+    setSectionsData([]);
+    setProposeShapeError(null);
     setRfiResponse({
       requirements_answered: [],
       questions_answered: [],
@@ -228,6 +254,48 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           submission_format: '',
         });
       }
+
+      // Novel-path trigger. Scan returned an unknown style or low
+      // confidence — call the shape proposer so the wizard can offer
+      // a custom layout instead of forcing the doc into a wrong template.
+      const styleUnknown = proposalStyle() === 'unknown';
+      const lowConfidence = proposalConfidence() < 0.6;
+      if ((styleUnknown || lowConfidence) && !novelShape() && scopeText().trim().length >= 40) {
+        void proposeNovelShape();
+      }
+    }
+  };
+
+  const proposeNovelShape = async () => {
+    setProposingShape(true);
+    setProposeShapeError(null);
+    try {
+      const resp = await fetch('/api/shape/propose', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          text: scopeText(),
+          client_name: clientName(),
+          project_title: projectTitle(),
+        }),
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      const data = (await resp.json()) as {
+        source: 'matched' | 'proposed';
+        shape_id?: string;
+        shape: Shape;
+        prefilled: Shape;
+        match_distance?: number;
+      };
+      setNovelShape(data.shape);
+      setNovelShapeSource(data.source);
+      setNovelShapeId(data.shape_id ?? null);
+      setNovelMatchDistance(data.match_distance ?? null);
+      setSectionsData(data.prefilled.sections);
+    } catch (e) {
+      setProposeShapeError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProposingShape(false);
     }
   };
 
@@ -267,6 +335,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
     setRenderingPdf(true);
     try {
       const narrative = useNarrativePricing();
+      const novel = novelShape() != null && novelAccepted();
       const resp = await fetch('/api/quote/render-pdf', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -277,15 +346,13 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           project_title: projectTitle(),
           project_address: projectAddress(),
           scope_summary: scopeSummary(),
-          proposal_style: proposalStyle(),
+          proposal_style: novel ? 'novel' : proposalStyle(),
           program_type: programType(),
           term_months: termMonths(),
-          // Pre-apply per-line margin so the PDF shows the customer-
-          // facing price per line. unit_price stays as cost basis on
-          // the wizard; the PDF only needs the all-in line subtotal.
-          // Skipped entirely in narrative mode — partnership/consulting
-          // proposals price by phase, not by qty × unit.
-          line_items: narrative
+          // Skip line_items entirely when novel — sections_data is
+          // the priced/narrative output. Same for narrative
+          // (phase-priced) docs.
+          line_items: novel || narrative
             ? []
             : lineItems().map((li) => {
                 const m = li.margin_pct != null ? li.margin_pct : markupPct();
@@ -296,8 +363,11 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
                   subtotal: lineTotal,
                 };
               }),
-          phases: phases().length > 0 ? phases() : null,
-          rebate_terms: rebateTerms().length > 0 ? rebateTerms() : null,
+          phases: !novel && phases().length > 0 ? phases() : null,
+          rebate_terms: !novel && rebateTerms().length > 0 ? rebateTerms() : null,
+          // Novel-path output. Server renders sections in order.
+          sections_data: novel ? sectionsData() : null,
+          shape_name: novel ? novelShape()?.name : null,
           total: total(),
           shop: props.shop,
         }),
@@ -323,6 +393,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
     setSendError(null);
     try {
       // Save
+      const novel = novelShape() != null && novelAccepted();
       const saveResp = await fetch('/api/quote/save', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -338,12 +409,16 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           source: 'manual',
           total: total(),
           margin_pct: markupPct(),
-          line_items: lineItems(),
-          proposal_style: proposalStyle(),
+          // In novel-path the operator's output is sections_data,
+          // not line_items. Skip the line_items payload entirely.
+          line_items: novel ? [] : lineItems(),
+          proposal_style: novel ? 'novel' : proposalStyle(),
           program_type: programType(),
           term_months: termMonths(),
-          phases: phases().length > 0 ? phases() : null,
+          phases: !novel && phases().length > 0 ? phases() : null,
           rfi_response: proposalStyle() === 'rfi_received' ? rfiResponse() : null,
+          shape_id: novel ? novelShapeId() : null,
+          sections_data: novel ? sectionsData() : null,
         }),
       });
       if (!saveResp.ok) throw new Error(`Save failed: ${await saveResp.text()}`);
@@ -410,6 +485,18 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           rfiRequirements={rfiRequirements}
           rfiQuestions={rfiQuestions}
           termMonths={termMonths}
+          novelShape={novelShape}
+          novelShapeSource={novelShapeSource}
+          novelMatchDistance={novelMatchDistance}
+          proposingShape={proposingShape}
+          proposeShapeError={proposeShapeError}
+          onUpdateNovelShape={(s) => {
+            setNovelShape(s);
+            setSectionsData(s.sections);
+          }}
+          onAcceptNovelShape={() => {
+            setNovelAccepted(true);
+          }}
           onRetry={startScan}
           onBack={() => setStepIdx(0)}
           onContinue={() => setStepIdx(2)}
@@ -420,6 +507,9 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
         <Show
           when={proposalStyle() === 'rfi_received'}
           fallback={
+            <Show
+              when={novelShape() && novelAccepted()}
+              fallback={
             <PricingStep
               shop={props.shop}
               lineItems={lineItems}
@@ -440,6 +530,20 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
               onBack={() => setStepIdx(1)}
               onContinue={goToReview}
             />
+              }
+            >
+              <NovelComposeStep
+                shape={novelShape as () => Shape}
+                sections={sectionsData}
+                onUpdateSection={(idx, next) => {
+                  const ns = sectionsData().slice();
+                  ns[idx] = next;
+                  setSectionsData(ns);
+                }}
+                onBack={() => setStepIdx(1)}
+                onContinue={goToReview}
+              />
+            </Show>
           }
         >
           <RfiStep
@@ -479,6 +583,9 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           phases={phases}
           rebateTerms={rebateTerms}
           termMonths={termMonths}
+          novelShape={novelShape}
+          novelAccepted={novelAccepted}
+          sectionsData={sectionsData}
           shop={props.shop}
           onBack={() => setStepIdx(2)}
           onSend={saveAndSend}
@@ -496,6 +603,10 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           projectTitle={projectTitle}
           total={total}
           lineItemCount={() => lineItems().length}
+          novelShape={novelShape}
+          novelAccepted={novelAccepted}
+          novelShapeSource={novelShapeSource}
+          sectionsData={sectionsData}
           onNewQuote={() => window.location.reload()}
         />
       </Show>
@@ -1115,6 +1226,13 @@ function ScopeStep(p: {
   rfiRequirements: () => string[];
   rfiQuestions: () => string[];
   termMonths: () => number | null;
+  novelShape: () => Shape | null;
+  novelShapeSource: () => 'matched' | 'proposed' | null;
+  novelMatchDistance: () => number | null;
+  proposingShape: () => boolean;
+  proposeShapeError: () => string | null;
+  onUpdateNovelShape: (s: Shape) => void;
+  onAcceptNovelShape: () => void;
   onRetry: () => void;
   onBack: () => void;
   onContinue: () => void;
@@ -1208,6 +1326,35 @@ function ScopeStep(p: {
             questions={p.rfiQuestions}
             onBack={p.onBack}
           />
+        </div>
+      </Show>
+
+      {/* Novel-path confirmation. Appears when scan style is
+          'unknown' or confidence < 0.6 and the shape proposer has
+          returned a layout. One click → accept; opens FreeformEditor
+          on the Pricing step. */}
+      <Show when={!p.scanning() && p.proposingShape()}>
+        <div class="mt-6 rounded-lg border border-[color:var(--color-line)] bg-[color:var(--color-surface-2)] px-4 py-3 text-[13px] italic font-serif text-[color:var(--color-muted)]">
+          Reading the doc shape…
+        </div>
+      </Show>
+      <Show when={!p.scanning() && p.novelShape()}>
+        <div class="mt-6">
+          <NovelShapeConfirmCard
+            shape={p.novelShape as () => Shape}
+            source={p.novelShapeSource as () => 'matched' | 'proposed'}
+            matchDistance={p.novelMatchDistance}
+            onUpdateShape={p.onUpdateNovelShape}
+            onAccept={() => {
+              p.onAcceptNovelShape();
+              p.onContinue();
+            }}
+          />
+        </div>
+      </Show>
+      <Show when={!p.scanning() && p.proposeShapeError()}>
+        <div class="mt-3 rounded-lg bg-[color:var(--color-danger-tint)] px-4 py-3 text-sm text-[color:var(--color-danger)]">
+          Shape proposer failed: {p.proposeShapeError()}
         </div>
       </Show>
 
@@ -1689,6 +1836,9 @@ function ReviewStep(p: {
   phases: () => Phase[];
   rebateTerms: () => Array<{ product: string; rebate: string; basis: string }>;
   termMonths: () => number | null;
+  novelShape: () => Shape | null;
+  novelAccepted: () => boolean;
+  sectionsData: () => Section[];
   shop: ShopContext;
   onBack: () => void;
   onSend: () => void;
@@ -1721,11 +1871,12 @@ function ReviewStep(p: {
   };
 
   // Style-aware view flags. Hide markup math + relax "needs line
-  // items" for partnership/consulting where total may be 0 or
-  // structured as phases/rebates.
+  // items" for partnership/consulting/novel where total may be 0 or
+  // structured as phases / rebates / freeform sections.
   const isPartnership = () => p.proposalStyle() === 'partnership';
   const isConsulting = () => p.proposalStyle() === 'consulting';
-  const isNarrative = () => isPartnership() || isConsulting();
+  const isNovel = () => p.novelShape() != null && p.novelAccepted();
+  const isNarrative = () => isPartnership() || isConsulting() || isNovel();
   const hidesMarkup = () => isNarrative();
 
   // Pre-send readiness checks — each row gets a green check or a soft warning.
@@ -1737,7 +1888,23 @@ function ReviewStep(p: {
 
     // The "what's on the proposal" row adapts by style.
     let contentCheck: { ok: boolean; label: string; sub?: string };
-    if (isPartnership() && rebates.length > 0) {
+    if (isNovel()) {
+      const sections = p.sectionsData();
+      const populated = sections.filter((s) => {
+        if (s.kind === 'text') return s.body.trim().length > 0;
+        if (s.kind === 'bullets') return s.items.length > 0;
+        if (s.kind === 'kv_table') return s.rows.length > 0;
+        return false;
+      }).length;
+      contentCheck = {
+        ok: populated > 0,
+        label: `${populated} of ${sections.length} section${sections.length === 1 ? '' : 's'} filled`,
+        sub:
+          populated === 0
+            ? 'Compose step has no content — go back and fill at least one section.'
+            : undefined,
+      };
+    } else if (isPartnership() && rebates.length > 0) {
       contentCheck = {
         ok: true,
         label: `${rebates.length} rebate term${rebates.length === 1 ? '' : 's'}${phaseCount > 0 ? ` · ${phaseCount} phase${phaseCount === 1 ? '' : 's'}` : ''}`,
@@ -1923,14 +2090,31 @@ function ReviewStep(p: {
               program shape instead of "$0.00", and skip the markup row. */}
           <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
             <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-              {isPartnership() && p.total() === 0 ? 'Program' : 'Final price'}
+              {isPartnership() && p.total() === 0
+                ? 'Program'
+                : isNovel() && p.total() === 0
+                  ? 'Layout'
+                  : 'Final price'}
             </div>
             <Show
               when={isPartnership() && p.total() === 0}
               fallback={
-                <div class="mt-1 font-serif text-[32px] font-medium tabular-nums leading-none">
-                  {fmt(p.total())}
-                </div>
+                <Show
+                  when={isNovel() && p.total() === 0}
+                  fallback={
+                    <div class="mt-1 font-serif text-[32px] font-medium tabular-nums leading-none">
+                      {fmt(p.total())}
+                    </div>
+                  }
+                >
+                  <div class="mt-1 font-serif text-[22px] font-medium leading-snug">
+                    {p.novelShape()?.name ?? 'Custom layout'}
+                  </div>
+                  <div class="text-[12.5px] text-[color:var(--color-muted)] mt-1">
+                    {p.sectionsData().length} section
+                    {p.sectionsData().length === 1 ? '' : 's'}
+                  </div>
+                </Show>
               }
             >
               <div class="mt-1 font-serif text-[22px] font-medium leading-snug">
@@ -1944,7 +2128,11 @@ function ReviewStep(p: {
             <div class="mt-2 text-[12.5px] text-[color:var(--color-muted)]">
               to <span class="font-medium text-[color:var(--color-ink)]">{recipient()}</span>
             </div>
-            <Show when={!(isPartnership() && p.total() === 0)}>
+            <Show
+              when={
+                !((isPartnership() && p.total() === 0) || (isNovel() && p.total() === 0))
+              }
+            >
               <dl class="mt-4 space-y-1.5 text-[13px] border-t border-[color:var(--color-line)] pt-3">
                 <div class="flex justify-between">
                   <dt class="text-[color:var(--color-muted)]">
@@ -2049,6 +2237,63 @@ function ReviewStep(p: {
   );
 }
 
+/**
+ * 5th-path equivalent of PricingStep — replaces the line-items
+ * table for docs that don't fit a fast-path shape. Renders the
+ * FreeformEditor on the operator-accepted shape; Continue is gated
+ * on at least one populated section so empty proposals don't fly
+ * through.
+ */
+function NovelComposeStep(p: {
+  shape: () => Shape;
+  sections: () => Section[];
+  onUpdateSection: (idx: number, next: Section) => void;
+  onBack: () => void;
+  onContinue: () => void;
+}) {
+  const populated = () => countPopulated(p.sections());
+  const ready = () => populated() >= 1;
+
+  return (
+    <div>
+      <div class="flex items-start gap-6">
+        <div class="flex-1 min-w-0">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+            Step 3 · Compose
+          </div>
+          <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">
+            Read through, edit anything.
+          </h1>
+          <p class="mt-1.5 text-[13.5px] font-serif italic text-[color:var(--color-muted)] leading-relaxed">
+            Brief pre-filled each section from the source. Edit inline —
+            no rigid template, just the structure you confirmed.
+          </p>
+        </div>
+        <div class="text-right">
+          <div class="font-serif text-[28px] tabular-nums leading-none">
+            {populated()}
+            <span class="text-[14px] text-[color:var(--color-muted)]">/{p.sections().length}</span>
+          </div>
+          <div class="text-[11px] font-mono uppercase text-[color:var(--color-muted-2)] mt-0.5">
+            sections filled
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-6">
+        <FreeformEditor sections={p.sections} onUpdate={p.onUpdateSection} />
+      </div>
+
+      <div class="mt-6 flex items-center justify-between">
+        <Button variant="ghost" onClick={p.onBack}>← Back</Button>
+        <Button variant="accent" disabled={!ready()} onClick={p.onContinue}>
+          Continue to review →
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function SentStep(p: {
   quoteId: () => string | null;
   quoteRef: () => string | null;
@@ -2057,8 +2302,47 @@ function SentStep(p: {
   projectTitle: () => string;
   total: () => number;
   lineItemCount: () => number;
+  novelShape: () => Shape | null;
+  novelAccepted: () => boolean;
+  novelShapeSource: () => 'matched' | 'proposed' | null;
+  sectionsData: () => Section[];
   onNewQuote: () => void;
 }) {
+  // Offer to save the proposed layout to the shop's library so the
+  // next similar doc auto-matches. Only fires when the shape was
+  // freshly proposed (not already a matched library shape).
+  const canSaveShape = () =>
+    p.novelShape() != null &&
+    p.novelAccepted() &&
+    p.novelShapeSource() === 'proposed';
+  const [savingShape, setSavingShape] = createSignal(false);
+  const [savedShape, setSavedShape] = createSignal(false);
+  const [saveError, setSaveError] = createSignal<string | null>(null);
+
+  const saveShape = async () => {
+    const shape = p.novelShape();
+    if (!shape) return;
+    setSavingShape(true);
+    setSaveError(null);
+    try {
+      const resp = await fetch('/api/shape/save', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: shape.name,
+          description: shape.description,
+          sections: p.sectionsData(),
+          total_required: shape.total_required,
+        }),
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      setSavedShape(true);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingShape(false);
+    }
+  };
   const sentAt = new Date().toLocaleString('en-US', {
     weekday: 'short',
     month: 'short',
@@ -2158,6 +2442,48 @@ function SentStep(p: {
         </a>
         <Button variant="accent" onClick={p.onNewQuote}>New quote</Button>
       </div>
+
+      <Show when={canSaveShape()}>
+        <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-paper-2,#f6f4ef)] p-5 max-w-[640px]">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+            Save this layout
+          </div>
+          <p class="mt-1.5 text-[13.5px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
+            Brief composed this proposal as <strong class="font-medium">"{p.novelShape()?.name}"</strong>.
+            Save it to your library and the next similar doc auto-routes here —
+            no shape proposal step required.
+          </p>
+          <Show
+            when={!savedShape()}
+            fallback={
+              <p class="mt-3 text-[12.5px] font-mono text-[color:var(--color-good,#3a7048)]">
+                ✓ Saved. Similar docs will use this layout next time.
+              </p>
+            }
+          >
+            <div class="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={saveShape}
+                disabled={savingShape()}
+                class="font-mono text-[12px] uppercase tracking-wide border border-[color:var(--color-ink)] bg-[color:var(--color-ink)] text-[color:var(--color-surface)] disabled:opacity-50 px-3 py-1.5 rounded-sm"
+              >
+                {savingShape() ? 'Saving…' : 'Save layout'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSavedShape(true)}
+                class="font-mono text-[12px] uppercase tracking-wide text-[color:var(--color-muted-2)] hover:text-[color:var(--color-ink)] px-3 py-1.5"
+              >
+                No thanks
+              </button>
+            </div>
+            <Show when={saveError()}>
+              <p class="mt-2 text-[12px] text-[color:var(--color-danger)]">{saveError()}</p>
+            </Show>
+          </Show>
+        </div>
+      </Show>
     </div>
   );
 }
