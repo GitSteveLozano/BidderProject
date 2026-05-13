@@ -5,7 +5,7 @@
  * error text below. Pass the input via children so the component
  * stays input-type-agnostic.
  */
-import { Show, type ParentComponent } from 'solid-js';
+import { Show, splitProps, type ParentComponent } from 'solid-js';
 
 interface FieldProps {
   label: string;
@@ -38,11 +38,17 @@ const Field: ParentComponent<FieldProps> = (props) => (
   </div>
 );
 
-/** Standalone input styled to match Field. Use for plain controls. */
+/** Standalone input styled to match Field. Use for plain controls.
+ *
+ * Uses splitProps (not native destructuring) so the reactive `value`
+ * accessor survives. Plain destructuring (`const { ...rest } = props`)
+ * snapshots props at mount time — typing works (native DOM keeps the
+ * value) but programmatic setters never propagate to the DOM. That's
+ * exactly what hit the new-quote IntakeStep autofill. */
 export const Input: ParentComponent<
   { class?: string } & Omit<JSX.InputHTMLAttributes<HTMLInputElement>, 'class'>
 > = (props) => {
-  const { class: cls, children: _c, ...rest } = props;
+  const [local, rest] = splitProps(props, ['class', 'children']);
   return (
     <input
       {...rest}
@@ -52,7 +58,7 @@ export const Input: ParentComponent<
         'focus:outline-none focus:border-[color:var(--color-accent)]',
         'focus:shadow-[0_0_0_3px_var(--color-accent-tint)]',
         'placeholder:text-[color:var(--color-muted-2)]',
-        cls ?? '',
+        local.class ?? '',
       ].join(' ')}
     />
   );
