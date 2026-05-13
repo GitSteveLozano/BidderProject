@@ -97,30 +97,36 @@ if (Astro.locals.user) {
           </p>
         </div>
 
-        <!-- Editorial right pane — mocked quote card -->
+        <!-- Editorial right pane — rotating sample card.
+             Cycles through six variants covering different proposal
+             types: contractor, agency, consulting, supplier rebate,
+             RFI response, GC nudge. Random pick on load + auto-rotate
+             every ~7s with crossfade. Communicates "Brief works for
+             any bid shape, not just construction." -->
         <aside class="hidden lg:block">
-          <div class="rounded-2xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-7 shadow-[var(--shadow-md)] relative">
-            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1.5">
+          <div
+            id="brief-sample-card"
+            class="rounded-2xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-7 shadow-[var(--shadow-md)] relative transition-opacity duration-300"
+            data-state="idle"
+          >
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1.5" data-field="eyebrow">
               Brief drafted a reply
             </div>
-            <h3 class="font-serif text-[19px] font-medium leading-tight">
+            <h3 class="font-serif text-[19px] font-medium leading-tight" data-field="headline">
               Halsted &amp; Sons · Q-2026-0184
             </h3>
-            <p class="mt-4 text-[14px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
-              Priya — appreciate the quick read on the spec. To your question on
-              the sand-float finish: we'd run it over the brown coat with a
-              tighter grit so it reads cleaner up close. Adds a half-day to
-              the schedule, no material impact.
+            <p class="mt-4 text-[14px] font-serif text-[color:var(--color-ink-2)] leading-relaxed whitespace-pre-line" data-field="body">
+              Priya — appreciate the quick read on the spec. To your question on the sand-float finish: we'd run it over the brown coat with a tighter grit so it reads cleaner up close. Adds a half-day to the schedule, no material impact.
             </p>
-            <p class="mt-3 text-[14px] font-serif italic text-[color:var(--color-muted)]">
+            <p class="mt-3 text-[14px] font-serif italic text-[color:var(--color-muted)]" data-field="signature">
               — Cavy
             </p>
-            <div class="mt-5 pt-4 border-t border-[color:var(--color-line)] flex items-center gap-2 text-[11.5px] font-mono uppercase tracking-wide text-[color:var(--color-muted)]">
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-accent)]" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <div class="mt-5 pt-4 border-t border-[color:var(--color-line)] flex items-start gap-2 text-[11.5px] font-mono uppercase tracking-wide text-[color:var(--color-muted)]">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-accent)] mt-0.5 shrink-0" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
                 <path d="M7 1l1.6 4.3h4.4l-3.5 2.8 1.3 4.3-3.8-2.6-3.8 2.6 1.3-4.3-3.5-2.8h4.4z" />
               </svg>
-              Why this draft.
-              <span class="text-[color:var(--color-muted-2)] font-sans normal-case tracking-normal">
+              <span class="shrink-0" data-field="reason-label">Why this draft.</span>
+              <span class="text-[color:var(--color-muted-2)] font-sans normal-case tracking-normal" data-field="reason">
                 Priya read the PDF on the day it landed but hasn't opened it since.
               </span>
             </div>
@@ -128,6 +134,109 @@ if (Astro.locals.user) {
           <div class="absolute -bottom-3 -right-3 rounded-full bg-[color:var(--color-surface-2)] border border-[color:var(--color-line-2)] px-3 py-1.5 font-mono text-[11px] text-[color:var(--color-muted)] shadow-sm rotate-[-1.5deg]">
             edit anything · you hit send
           </div>
+
+          <script is:inline>
+            (function () {
+              var card = document.getElementById('brief-sample-card');
+              if (!card) return;
+              var variants = [
+                {
+                  eyebrow: 'Brief drafted a reply',
+                  headline: 'Halsted & Sons · Q-2026-0184',
+                  body:
+                    "Priya — appreciate the quick read on the spec. To your question on the sand-float finish: we'd run it over the brown coat with a tighter grit so it reads cleaner up close. Adds a half-day to the schedule, no material impact.",
+                  signature: '— Cavy',
+                  reasonLabel: 'Why this draft.',
+                  reason: "Priya read the PDF on the day it landed but hasn't opened it since.",
+                },
+                {
+                  eyebrow: 'Brief drafted a cover note',
+                  headline: 'Paras Inc · GTM strategy proposal',
+                  body:
+                    "Maya — quick context on what's attached: Phase 1 covers the buyer-funnel audit (4 wks), Phase 2 is the segmentation rework (6 wks), Phase 3 ships the SDR enablement kit. Fees per phase inside. Happy to walk it through Tuesday.",
+                  signature: '— Terry',
+                  reasonLabel: 'Why this draft.',
+                  reason: "Maya runs intros warm; this leads with phases + offers a call.",
+                },
+                {
+                  eyebrow: 'Brief drafted a nudge',
+                  headline: 'GC Pacific Builders · Q-2026-0198',
+                  body:
+                    "Marco — circling back on the Burbank quote. No pressure on the number; just want to know if the scope read right or if you need anything revised before you take it to the owner.",
+                  signature: '— Cavy',
+                  reasonLabel: 'Why this draft.',
+                  reason: "Marco bids Fridays. Sent Wed, no read — nudge lands tomorrow 9am.",
+                },
+                {
+                  eyebrow: 'Brief drafted a partnership pitch',
+                  headline: 'Cardel Homes · Silverton Phase 1',
+                  body:
+                    "Cardel team — proposing the full-wrap Hardie program for Silverton: $483/home rebate on plank + panel + trim + shingle, 24-month term, transition support across crews and design. Schedule + training plan attached.",
+                  signature: '— David',
+                  reasonLabel: 'Why this draft.',
+                  reason: "Cardel's existing Hardie usage warrants the program rate, not the spot price.",
+                },
+                {
+                  eyebrow: 'Brief drafted an RFI response',
+                  headline: 'uOttawa · Housing Billboard RFI',
+                  body:
+                    "Re: requirement 4 (security maturity). Our SOC 2 Type II is current; full audit attached as Appendix C. Multi-tenant isolation runs through PostgreSQL RLS at the row level — no application-layer trust required. Specifics in §3.",
+                  signature: '— Submissions team',
+                  reasonLabel: 'Why this draft.',
+                  reason: 'Buyer asked 12 questions; this answers #4 with evidence pointer, not boilerplate.',
+                },
+                {
+                  eyebrow: 'Brief drafted a consulting SOW',
+                  headline: 'Vermont Modern · Brand systems engagement',
+                  body:
+                    "Priya — the engagement breaks into three phases over ten weeks: brand audit + positioning (3 wks), visual system + guidelines (4 wks), rollout assets + handoff (3 wks). Fixed-fee per phase, no scope creep. Detail inside.",
+                  signature: '— Studio team',
+                  reasonLabel: 'Why this draft.',
+                  reason: 'Phase-priced engagements close faster than T&M on creative scopes.',
+                },
+              ];
+
+              var pickIndex = Math.floor(Math.random() * variants.length);
+              var fields = {
+                eyebrow: card.querySelector('[data-field="eyebrow"]'),
+                headline: card.querySelector('[data-field="headline"]'),
+                body: card.querySelector('[data-field="body"]'),
+                signature: card.querySelector('[data-field="signature"]'),
+                reasonLabel: card.querySelector('[data-field="reason-label"]'),
+                reason: card.querySelector('[data-field="reason"]'),
+              };
+
+              function paint(idx) {
+                var v = variants[idx];
+                if (fields.eyebrow) fields.eyebrow.textContent = v.eyebrow;
+                if (fields.headline) fields.headline.textContent = v.headline;
+                if (fields.body) fields.body.textContent = v.body;
+                if (fields.signature) fields.signature.textContent = v.signature;
+                if (fields.reasonLabel) fields.reasonLabel.textContent = v.reasonLabel;
+                if (fields.reason) fields.reason.textContent = v.reason;
+              }
+
+              // Initial paint — instant.
+              paint(pickIndex);
+
+              // Auto-rotate every ~9s with a brief fade. Pauses on
+              // hover so the visitor can read whatever caught their eye.
+              var paused = false;
+              card.addEventListener('mouseenter', function () { paused = true; });
+              card.addEventListener('mouseleave', function () { paused = false; });
+
+              setInterval(function () {
+                if (paused) return;
+                if (document.visibilityState !== 'visible') return;
+                card.style.opacity = '0';
+                setTimeout(function () {
+                  pickIndex = (pickIndex + 1) % variants.length;
+                  paint(pickIndex);
+                  card.style.opacity = '1';
+                }, 280);
+              }, 9000);
+            })();
+          </script>
         </aside>
       </div>
     </section>
