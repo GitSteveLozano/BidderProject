@@ -215,26 +215,150 @@ const inboundForDrawer = lastInbound
         </div>
       )}
 
+      {/* Body — branches by pricing_structure. Itemized keeps the
+          existing editable LineItemsTable (it's the most-used path
+          and stays inline-editable for DRAFT quotes). The others
+          render read-only summaries — the wizard is still the place
+          to actually edit them. */}
       <div class="mt-6">
-        <LineItemsTable
-          client:load
-          quote_id={quote.id}
-          initial={lineItems.map((li: any) => ({
-            id: li.id,
-            position: li.position,
-            description: li.description,
-            qty: Number(li.qty),
-            unit: li.unit,
-            unit_price: Number(li.unit_price),
-            subtotal: Number(li.subtotal),
-            category: li.category,
-            confidence: li.confidence,
-            margin_pct: li.margin_pct != null ? Number(li.margin_pct) : null,
-          }))}
-          editable={quote.state === 'DRAFT'}
-          total={Number(quote.total)}
-          quote_margin_pct={quote.margin_pct != null ? Number(quote.margin_pct) : 0}
-        />
+        {quote.pricing_structure === 'phase_priced' && Array.isArray(quote.phases) && quote.phases.length > 0 ? (
+          <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
+            <div class="px-4 py-3 border-b border-[color:var(--color-line)] flex justify-between items-baseline">
+              <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
+                Phases &amp; deliverables
+              </div>
+              <span class="text-[11px] font-mono text-[color:var(--color-muted-2)]">
+                {(quote.phases as any[]).length} phase{(quote.phases as any[]).length === 1 ? '' : 's'}
+              </span>
+            </div>
+            <ul class="divide-y divide-[color:var(--color-line)]">
+              {(quote.phases as any[]).map((ph: any, idx: number) => (
+                <li class="px-4 py-3 grid grid-cols-[40px_1fr_120px_140px] gap-3 items-baseline text-sm">
+                  <span class="font-mono text-[11px] text-[color:var(--color-muted-2)]">{String(idx + 1).padStart(2, '0')}</span>
+                  <div>
+                    <div class="font-medium">{ph.name}</div>
+                    {Array.isArray(ph.deliverables) && ph.deliverables.length > 0 && (
+                      <ul class="mt-1 ml-0 pl-4 text-[12.5px] text-[color:var(--color-muted)] list-disc font-serif">
+                        {ph.deliverables.map((d: string) => <li>{d}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                  <div class="text-right font-mono text-[12.5px] text-[color:var(--color-muted)]">{ph.duration ?? ''}</div>
+                  <div class="text-right font-mono tabular-nums">{ph.fee != null ? `$${Number(ph.fee).toLocaleString()}` : '—'}</div>
+                </li>
+              ))}
+            </ul>
+            <div class="px-4 py-3 border-t border-[color:var(--color-line)] flex justify-between items-baseline">
+              <span class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Total</span>
+              <span class="font-serif text-[18px] tabular-nums font-medium">${Number(quote.total).toLocaleString()}</span>
+            </div>
+          </div>
+        ) : quote.pricing_structure === 'rebate_program' && Array.isArray(quote.rebate_terms) && quote.rebate_terms.length > 0 ? (
+          <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
+            <div class="px-4 py-3 border-b border-[color:var(--color-line)] flex justify-between items-baseline">
+              <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
+                Rebate program
+              </div>
+              {quote.term_months && (
+                <span class="text-[11px] font-mono text-[color:var(--color-muted-2)]">{quote.term_months}-month term</span>
+              )}
+            </div>
+            <ul class="divide-y divide-[color:var(--color-line)]">
+              {(quote.rebate_terms as any[]).map((rt: any) => (
+                <li class="px-4 py-2.5 grid grid-cols-[1fr_140px_1fr] gap-3 items-baseline text-sm">
+                  <span class="font-medium">{rt.product}</span>
+                  <span class="font-mono tabular-nums text-right">{rt.rebate}</span>
+                  <span class="text-[color:var(--color-muted)] text-[12.5px]">{rt.basis}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : quote.pricing_structure === 'time_and_materials' && Array.isArray(quote.tm_rates) && quote.tm_rates.length > 0 ? (
+          <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
+            <div class="px-4 py-3 border-b border-[color:var(--color-line)]">
+              <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Rates &amp; estimate</div>
+            </div>
+            <ul class="divide-y divide-[color:var(--color-line)]">
+              {(quote.tm_rates as any[]).filter((r: any) => r.role && Number(r.rate) > 0).map((r: any) => (
+                <li class="px-4 py-2.5 grid grid-cols-[1fr_140px] gap-3 items-baseline text-sm">
+                  <span class="font-medium">{r.role}</span>
+                  <span class="font-mono tabular-nums text-right">${Number(r.rate).toLocaleString()} / hr</span>
+                </li>
+              ))}
+            </ul>
+            {quote.tm_estimate && (quote.tm_estimate as any).hours_high > 0 && (
+              <div class="px-4 py-3 border-t border-[color:var(--color-line)] text-[12.5px] text-[color:var(--color-ink-2)] font-serif leading-relaxed">
+                <strong class="font-medium">Estimate band:</strong>{' '}
+                {(quote.tm_estimate as any).hours_low}–{(quote.tm_estimate as any).hours_high} hrs
+                {(quote.tm_estimate as any).materials ? `, + $${Number((quote.tm_estimate as any).materials).toLocaleString()} materials` : ''}.
+                T&amp;M billing — actuals invoiced against logged hours.
+              </div>
+            )}
+          </div>
+        ) : quote.pricing_structure === 'fixed_price' && lineItems.length > 0 ? (
+          <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
+            <div class="px-4 py-3 border-b border-[color:var(--color-line)]">
+              <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Engagement</div>
+            </div>
+            <div class="px-4 py-3 font-serif text-[14px] leading-relaxed whitespace-pre-wrap">
+              {lineItems[0].description}
+            </div>
+            <div class="px-4 py-3 border-t border-[color:var(--color-line)] flex justify-between items-baseline">
+              <span class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Fee</span>
+              <span class="font-serif text-[18px] tabular-nums font-medium">${Number(quote.total).toLocaleString()}</span>
+            </div>
+          </div>
+        ) : Array.isArray(quote.sections_data) && (quote.sections_data as any[]).length > 0 ? (
+          <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden divide-y divide-[color:var(--color-line)]">
+            {(quote.sections_data as any[]).map((s: any) => (
+              <div class="px-4 py-3">
+                <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-1.5">{s.label}</div>
+                {s.kind === 'text' && s.body && (
+                  <p class="font-serif text-[14px] leading-relaxed whitespace-pre-wrap text-[color:var(--color-ink-2)]">{s.body}</p>
+                )}
+                {s.kind === 'bullets' && Array.isArray(s.items) && (
+                  <ul class="font-serif text-[14px] leading-relaxed text-[color:var(--color-ink-2)] list-disc pl-5">
+                    {s.items.map((it: string) => <li>{it}</li>)}
+                  </ul>
+                )}
+                {s.kind === 'kv_table' && Array.isArray(s.headers) && Array.isArray(s.rows) && s.rows.length > 0 && (
+                  <table class="w-full text-[13.5px]">
+                    <thead>
+                      <tr>{s.headers.map((h: string, i: number) => <th class={`py-1.5 text-[10.5px] font-mono uppercase tracking-wide text-[color:var(--color-muted-2)] ${i > 0 ? 'text-right' : 'text-left'}`}>{h}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {s.rows.map((row: any) => (
+                        <tr class="border-t border-[color:var(--color-line)]">
+                          {s.headers.map((h: string, i: number) => <td class={`py-1.5 ${i > 0 ? 'text-right font-mono tabular-nums' : ''}`}>{row[h] ?? ''}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <LineItemsTable
+            client:load
+            quote_id={quote.id}
+            initial={lineItems.map((li: any) => ({
+              id: li.id,
+              position: li.position,
+              description: li.description,
+              qty: Number(li.qty),
+              unit: li.unit,
+              unit_price: Number(li.unit_price),
+              subtotal: Number(li.subtotal),
+              category: li.category,
+              confidence: li.confidence,
+              margin_pct: li.margin_pct != null ? Number(li.margin_pct) : null,
+            }))}
+            editable={quote.state === 'DRAFT'}
+            total={Number(quote.total)}
+            quote_margin_pct={quote.margin_pct != null ? Number(quote.margin_pct) : 0}
+          />
+        )}
       </div>
     </div>
 

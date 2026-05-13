@@ -25,7 +25,7 @@ const svc = supabaseService(env, 'service');
 const { data: quote } = await svc
   .from('quotes')
   .select(
-    'id, ref, state, client_name, client_contact_name, project_title, project_address, scope_summary, total, margin_pct, sent_at, shop_id, quote_line_items(id, position, description, qty, unit, unit_price, subtotal, margin_pct)',
+    '*, quote_line_items(id, position, description, qty, unit, unit_price, subtotal, margin_pct)',
   )
   .eq('id', id)
   .neq('state', 'DRAFT')
@@ -45,6 +45,50 @@ const { data: shop } = await svc
 const lineItems = (quote.quote_line_items ?? []).sort(
   (a: any, b: any) => a.position - b.position,
 );
+
+// Non-itemized offers — populated when pricing_structure is something
+// other than itemized. Each is read defensively because older rows
+// (pre-migration 011/012) have these fields as NULL.
+const phases: Array<{ name: string; deliverables?: string[]; duration?: string | null; fee?: number | null }> =
+  Array.isArray(quote.phases) ? quote.phases : [];
+const rebateTerms: Array<{ product: string; rebate: string; basis: string }> =
+  Array.isArray(quote.rebate_terms) ? quote.rebate_terms : [];
+const sectionsData: Array<{ kind: string; key?: string; label?: string; body?: string; items?: string[]; headers?: string[]; rows?: Array<Record<string, string>> }> =
+  Array.isArray(quote.sections_data) ? quote.sections_data : [];
+const tmRates: Array<{ role: string; rate: number }> =
+  Array.isArray(quote.tm_rates) ? quote.tm_rates : [];
+const tmEstimate: { hours_low: number; hours_high: number; materials: number } | null =
+  quote.tm_estimate && typeof quote.tm_estimate === 'object' ? quote.tm_estimate : null;
+
+const offerKind: 'quote' | 'bid' | 'proposal' | 'contract' =
+  ['quote', 'bid', 'proposal', 'contract'].includes(quote.offer_kind)
+    ? quote.offer_kind
+    : 'quote';
+const pricingStructure: 'fixed_price' | 'itemized' | 'phase_priced' | 'time_and_materials' | 'rebate_program' =
+  ['fixed_price', 'itemized', 'phase_priced', 'time_and_materials', 'rebate_program'].includes(quote.pricing_structure)
+    ? quote.pricing_structure
+    : 'itemized';
+
+const offerKindLabel = (() => {
+  switch (offerKind) {
+    case 'bid': return 'Bid';
+    case 'proposal': return 'Proposal';
+    case 'contract': return 'Contract';
+    default: return 'Quote';
+  }
+})();
+
+// T&M estimate band — average rate × hours range + materials.
+const tmAvgRate = tmRates.filter((r) => Number(r.rate) > 0);
+const tmAvg = tmAvgRate.length > 0
+  ? tmAvgRate.reduce((s, r) => s + Number(r.rate), 0) / tmAvgRate.length
+  : 0;
+const tmBandLow = tmEstimate
+  ? Math.round(tmAvg * (tmEstimate.hours_low ?? 0) + (tmEstimate.materials ?? 0))
+  : 0;
+const tmBandHigh = tmEstimate
+  ? Math.round(tmAvg * (tmEstimate.hours_high ?? 0) + (tmEstimate.materials ?? 0))
+  : 0;
 
 const shopLabel = shop?.trade_name || shop?.legal_name || 'Your contractor';
 
@@ -189,6 +233,39 @@ const sentDate = quote.sent_at
         font-family: 'Geist', sans-serif;
         font-weight: 500;
       }
+      .section-block {
+        padding: 16px 22px;
+        border-bottom: 1px solid var(--line);
+      }
+      .section-block:last-child { border-bottom: 0; }
+      .section-block > header {
+        padding: 0;
+        border: 0;
+        margin-bottom: 8px;
+        font-family: 'Geist Mono', monospace;
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        font-weight: 500;
+      }
+      .prose {
+        font-family: 'Newsreader', serif;
+        font-size: 14.5px;
+        line-height: 1.55;
+        color: var(--ink-2);
+        white-space: pre-wrap;
+        margin: 0;
+      }
+      .bullets {
+        font-family: 'Newsreader', serif;
+        font-size: 14px;
+        line-height: 1.55;
+        color: var(--ink-2);
+        margin: 0;
+        padding-left: 18px;
+      }
+      .bullets li { margin: 3px 0; }
       table { width: 100%; border-collapse: collapse; }
       th {
         font-family: 'Geist Mono', monospace;
@@ -256,7 +333,7 @@ const sentDate = quote.sent_at
       </header>
 
       <div class="eyebrow">
-        Quote {quote.ref}
+        {offerKindLabel} {quote.ref}
         {sentDate && ` · ${sentDate}`}
       </div>
       <h1>{quote.project_title}</h1>
@@ -272,38 +349,181 @@ const sentDate = quote.sent_at
         </div>
       )}
 
-      <div class="lines">
-        <header>Line items</header>
-        <table>
-          <thead>
-            <tr>
-              <th>Description</th>
-              <th class="num">Qty</th>
-              <th class="num">Unit</th>
-              <th class="num">Subtotal</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lineItems.map((li: any) => {
-              const quoteMargin = quote.margin_pct != null ? Number(quote.margin_pct) : 0;
-              const effective = li.margin_pct != null ? Number(li.margin_pct) : quoteMargin;
-              const lineTotal = Number(li.subtotal) * (1 + effective / 100);
+      {/* Body — branches by pricing_structure so each offer shape
+          renders correctly for the recipient. Pre-migration rows
+          (no pricing_structure set) fall through to the line-items
+          table, which is what they always rendered. */}
+      {sectionsData.length > 0 ? (
+        <div class="lines">
+          {sectionsData.map((s: any) => {
+            if (s.kind === 'text' && s.body?.trim()) {
               return (
-                <tr>
-                  <td>{li.description}</td>
-                  <td class="num">{Number(li.qty).toLocaleString()}</td>
-                  <td class="num">{li.unit ?? ''}</td>
-                  <td class="num">{fmtCurrencyFull(lineTotal)}</td>
-                </tr>
+                <div class="section-block">
+                  <header>{s.label}</header>
+                  <p class="prose">{s.body}</p>
+                </div>
               );
-            })}
-            <tr class="total">
-              <td colspan="3">Total</td>
-              <td class="num amount">{fmtCurrencyFull(Number(quote.total))}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+            }
+            if (s.kind === 'bullets' && Array.isArray(s.items) && s.items.length > 0) {
+              return (
+                <div class="section-block">
+                  <header>{s.label}</header>
+                  <ul class="bullets">
+                    {s.items.map((it: string) => <li>{it}</li>)}
+                  </ul>
+                </div>
+              );
+            }
+            if (s.kind === 'kv_table' && Array.isArray(s.headers) && Array.isArray(s.rows) && s.rows.length > 0) {
+              return (
+                <div class="section-block">
+                  <header>{s.label}</header>
+                  <table>
+                    <thead>
+                      <tr>{s.headers.map((h: string, i: number) => <th class={i > 0 ? 'num' : ''}>{h}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {s.rows.map((row: any) => (
+                        <tr>{s.headers.map((h: string, i: number) => <td class={i > 0 ? 'num' : ''}>{row[h] ?? ''}</td>)}</tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            }
+            return null;
+          })}
+        </div>
+      ) : pricingStructure === 'phase_priced' && phases.length > 0 ? (
+        <div class="lines">
+          <header>Phases &amp; deliverables</header>
+          <table>
+            <thead>
+              <tr>
+                <th>Phase</th>
+                <th class="num">Duration</th>
+                <th class="num">Fee</th>
+              </tr>
+            </thead>
+            <tbody>
+              {phases.map((ph: any, idx: number) => (
+                <tr>
+                  <td>
+                    <strong>{String(idx + 1).padStart(2, '0')} · {ph.name}</strong>
+                    {Array.isArray(ph.deliverables) && ph.deliverables.length > 0 && (
+                      <ul class="bullets" style="margin-top:6px">
+                        {ph.deliverables.map((d: string) => <li>{d}</li>)}
+                      </ul>
+                    )}
+                  </td>
+                  <td class="num">{ph.duration ?? ''}</td>
+                  <td class="num">{ph.fee != null ? fmtCurrencyFull(Number(ph.fee)) : '—'}</td>
+                </tr>
+              ))}
+              <tr class="total">
+                <td colspan="2">Total</td>
+                <td class="num amount">{fmtCurrencyFull(Number(quote.total))}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : pricingStructure === 'rebate_program' && rebateTerms.length > 0 ? (
+        <div class="lines">
+          <header>Rebate program{quote.term_months ? ` · ${quote.term_months}-month term` : ''}</header>
+          <table>
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th class="num">Rebate</th>
+                <th>Basis</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rebateTerms.map((rt: any) => (
+                <tr>
+                  <td>{rt.product}</td>
+                  <td class="num">{rt.rebate}</td>
+                  <td>{rt.basis}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : pricingStructure === 'time_and_materials' && tmRates.length > 0 ? (
+        <div class="lines">
+          <header>Rates &amp; estimate</header>
+          <table>
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th class="num">Rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tmRates.filter((r: any) => r.role && Number(r.rate) > 0).map((r: any) => (
+                <tr>
+                  <td>{r.role}</td>
+                  <td class="num">{fmtCurrencyFull(Number(r.rate))} / hr</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {tmEstimate && tmEstimate.hours_high > 0 && (
+            <p class="prose" style="margin-top:14px">
+              <strong>Estimate band:</strong> {fmtCurrencyFull(tmBandLow)} – {fmtCurrencyFull(tmBandHigh)}
+              {' '}({tmEstimate.hours_low}–{tmEstimate.hours_high} hrs
+              {tmEstimate.materials ? `, + ${fmtCurrencyFull(tmEstimate.materials)} materials` : ''}).
+              T&amp;M billing — actuals invoiced against logged hours. Estimate is planning only.
+            </p>
+          )}
+        </div>
+      ) : pricingStructure === 'fixed_price' && lineItems.length > 0 ? (
+        <div class="lines">
+          <header>Engagement</header>
+          <p class="prose">{lineItems[0].description}</p>
+          <table style="margin-top:14px">
+            <tbody>
+              <tr class="total">
+                <td>Fee</td>
+                <td class="num amount">{fmtCurrencyFull(Number(quote.total))}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div class="lines">
+          <header>Line items</header>
+          <table>
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th class="num">Qty</th>
+                <th class="num">Unit</th>
+                <th class="num">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lineItems.map((li: any) => {
+                const quoteMargin = quote.margin_pct != null ? Number(quote.margin_pct) : 0;
+                const effective = li.margin_pct != null ? Number(li.margin_pct) : quoteMargin;
+                const lineTotal = Number(li.subtotal) * (1 + effective / 100);
+                return (
+                  <tr>
+                    <td>{li.description}</td>
+                    <td class="num">{Number(li.qty).toLocaleString()}</td>
+                    <td class="num">{li.unit ?? ''}</td>
+                    <td class="num">{fmtCurrencyFull(lineTotal)}</td>
+                  </tr>
+                );
+              })}
+              <tr class="total">
+                <td colspan="3">Total</td>
+                <td class="num amount">{fmtCurrencyFull(Number(quote.total))}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <p class="signoff">
         Reply to this email or call us back any time with questions. Looking forward to it.
