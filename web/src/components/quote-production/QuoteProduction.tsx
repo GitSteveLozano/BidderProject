@@ -170,6 +170,11 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   const [quoteId, setQuoteId] = createSignal<string | null>(null);
   const [quoteRef, setQuoteRef] = createSignal<string | null>(null);
   const [sendError, setSendError] = createSignal<string | null>(null);
+  /** Set when /api/quote/send returns ok but with delivery_error
+   * (e.g. Brevo couldn't deliver, no recipients resolved). The quote
+   * is saved as SENT but the email didn't actually leave — operator
+   * needs to know so they can chase it manually. */
+  const [deliveryWarning, setDeliveryWarning] = createSignal<string | null>(null);
 
   // Derived totals — per-line margin overrides the global. A null
   // margin_pct on a line falls back to the quote-level markupPct.
@@ -279,6 +284,11 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
       cover_letter: '',
       submission_format: '',
     });
+    // 90-second hard cap on the scan. If Workers AI hangs or the
+    // network drops mid-stream, the wizard surfaces a friendly error
+    // + retry instead of pinning the "Scanning…" state forever.
+    const abortCtrl = new AbortController();
+    const timeoutId = setTimeout(() => abortCtrl.abort(), 90_000);
     try {
       const resp = await fetch('/api/quote/scan', {
         method: 'POST',
@@ -288,6 +298,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           client_name: clientName(),
           project_title: projectTitle(),
         }),
+        signal: abortCtrl.signal,
       });
       if (!resp.ok) throw new Error(`Server returned ${resp.status}: ${await resp.text()}`);
       const reader = resp.body!.getReader();
@@ -331,8 +342,17 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
         }
       }
     } catch (err) {
-      setScanError(err instanceof Error ? err.message : String(err));
+      const aborted =
+        err instanceof DOMException && err.name === 'AbortError';
+      setScanError(
+        aborted
+          ? "Scan took too long (over 90 seconds). The model may be overloaded — give it a moment and retry."
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      );
     } finally {
+      clearTimeout(timeoutId);
       setScanning(false);
       // After the scan settles, if the classifier says this is an
       // inbound RFI, seed the response shells from the buyer's
@@ -561,6 +581,13 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
         body: JSON.stringify({ quote_id: saved.id, channel }),
       });
       if (!sendResp.ok) throw new Error(`Send failed: ${await sendResp.text()}`);
+      const sendBody = (await sendResp.json().catch(() => null)) as
+        | { delivery_error?: string | null }
+        | null;
+      // Brevo soft-fail: quote rows are marked SENT regardless so the
+      // operator sees the pipeline state; surface the delivery error
+      // on SentStep so they know to chase it.
+      setDeliveryWarning(sendBody?.delivery_error ?? null);
       setStepIdx(4);
     } catch (err) {
       setSendError(err instanceof Error ? err.message : String(err));
@@ -734,6 +761,10 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           shop={props.shop}
           onBack={() => setStepIdx(2)}
           onSend={saveAndSend}
+          onRetryRender={() => {
+            setSendError(null);
+            void renderPdf();
+          }}
           sending={savingQuote}
           error={sendError}
         />
@@ -752,6 +783,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           novelAccepted={novelAccepted}
           novelShapeSource={novelShapeSource}
           sectionsData={sectionsData}
+          deliveryWarning={deliveryWarning}
           onNewQuote={() => window.location.reload()}
         />
       </Show>
@@ -2061,6 +2093,7 @@ function ReviewStep(p: {
   shop: ShopContext;
   onBack: () => void;
   onSend: () => void;
+  onRetryRender?: () => void;
   sending: () => boolean;
   error: () => string | null;
 }) {
@@ -2208,6 +2241,29 @@ function ReviewStep(p: {
               class="w-full aspect-[8.5/11] bg-white"
               title="Bid preview"
             />
+          </Show>
+          {/* Empty + not rendering + has error → preview failed. The
+              iframe never showed; surface the issue + a retry inline
+              so the operator isn't staring at a blank page. */}
+          <Show when={!p.rendering() && !p.pdfUrl() && p.error()}>
+            <div class="aspect-[8.5/11] flex flex-col items-center justify-center gap-3 px-8 text-center">
+              <div class="text-[15px] font-medium text-[color:var(--color-warn,#a85432)]">
+                Preview couldn't render.
+              </div>
+              <p class="text-[13px] text-[color:var(--color-muted)] font-serif leading-relaxed max-w-[40ch]">
+                Something went wrong producing the PDF. The quote itself is
+                fine — you can still save + send, or retry the preview.
+              </p>
+              <Show when={p.onRetryRender}>
+                <button
+                  type="button"
+                  onClick={() => p.onRetryRender!()}
+                  class="mt-1 font-mono text-[11.5px] uppercase tracking-wide border border-[color:var(--color-line-2)] bg-white px-3 py-1.5 rounded-sm"
+                >
+                  Retry preview
+                </button>
+              </Show>
+            </div>
           </Show>
         </div>
 
@@ -2525,6 +2581,7 @@ function SentStep(p: {
   novelAccepted: () => boolean;
   novelShapeSource: () => 'matched' | 'proposed' | null;
   sectionsData: () => Section[];
+  deliveryWarning: () => string | null;
   onNewQuote: () => void;
 }) {
   // Offer to save the proposed layout to the shop's library so the
@@ -2585,11 +2642,39 @@ function SentStep(p: {
           </svg>
         </div>
         <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">Step 5 · Sent</div>
-        <h1 class="mt-1 font-serif text-[40px] font-medium leading-tight">Off it goes.</h1>
+        <h1 class="mt-1 font-serif text-[40px] font-medium leading-tight">
+          {p.deliveryWarning() ? 'Saved — but not delivered.' : 'Off it goes.'}
+        </h1>
         <p class="mt-3 text-[15px] font-serif italic text-[color:var(--color-muted)] max-w-[42ch] mx-auto leading-relaxed">
-          {p.quoteRef()} is in {recipient()}'s inbox. Brief will tell you when it's read.
+          {p.deliveryWarning()
+            ? `${p.quoteRef()} is saved as sent in your pipeline, but the email didn't actually leave.`
+            : `${p.quoteRef()} is in ${recipient()}'s inbox. Brief will tell you when it's read.`}
         </p>
       </div>
+
+      <Show when={p.deliveryWarning()}>
+        <div class="mt-6 rounded-xl border border-[color:var(--color-warn,#a85432)] bg-[color:var(--color-warn-tint,#fcefe6)] p-5">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-warn,#a85432)]">
+            Delivery issue
+          </div>
+          <p class="mt-1.5 text-[13.5px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
+            {p.deliveryWarning()}
+          </p>
+          <p class="mt-2 text-[12.5px] text-[color:var(--color-muted)] leading-relaxed">
+            Send a manual reply from your email client, or go back and re-send
+            after fixing the recipient. The quote stays in the SENT state either
+            way — Brief won't double-send if you try again.
+          </p>
+          <Show when={p.quoteId()}>
+            <a
+              href={`/quotes/${p.quoteId()}`}
+              class="mt-3 inline-block font-mono text-[11.5px] uppercase tracking-wide text-[color:var(--color-warn,#a85432)] hover:text-[color:var(--color-ink)]"
+            >
+              Open the quote →
+            </a>
+          </Show>
+        </div>
+      </Show>
 
       {/* Ticket-stub summary */}
       <div class="mt-8 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-hidden">
