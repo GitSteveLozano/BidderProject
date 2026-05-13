@@ -14,6 +14,8 @@ import Button from '@/components/ui/Button';
 import Field, { Input } from '@/components/ui/Field';
 import Stepper from '@/components/ui/Stepper';
 import Pill from '@/components/ui/Pill';
+import OfferPanel from '@/components/quote-production/OfferPanel';
+import CoverNotePanel from '@/components/quote-production/CoverNotePanel';
 
 interface ShopContext {
   legal_name: string;
@@ -313,6 +315,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
         <PricingStep
           shop={props.shop}
           lineItems={lineItems}
+          scopeSummary={scopeSummary}
           markupPct={markupPct}
           setMarkupPct={setMarkupPct}
           baseSubtotal={baseSubtotal}
@@ -335,6 +338,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           marginAmount={marginAmount}
           markupPct={markupPct}
           lineItems={lineItems}
+          scopeSummary={scopeSummary}
           clientName={clientName}
           clientContact={clientContact}
           clientContactEmail={clientContactEmail}
@@ -1006,6 +1010,7 @@ function ScopeStep(p: {
 function PricingStep(p: {
   shop: ShopContext;
   lineItems: () => LineItem[];
+  scopeSummary: () => string;
   markupPct: () => number;
   setMarkupPct: (v: number) => void;
   baseSubtotal: () => number;
@@ -1026,7 +1031,7 @@ function PricingStep(p: {
         Confirm the numbers.
       </h1>
 
-      <div class="mt-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+      <div class="mt-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-x-auto">
           <div class="grid grid-cols-[3fr_60px_70px_90px_70px_100px_36px] min-w-[720px] px-4 py-3 border-b border-[color:var(--color-line)] text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
             <div>Description</div>
@@ -1104,6 +1109,7 @@ function PricingStep(p: {
           </div>
         </div>
 
+        <div class="space-y-4">
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
           <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
             Default margin
@@ -1142,6 +1148,20 @@ function PricingStep(p: {
             </div>
           </div>
         </div>
+
+        <OfferPanel
+          scopeSummary={p.scopeSummary}
+          lineItems={() =>
+            p.lineItems().map((li) => ({
+              description: li.description,
+              qty: li.qty,
+              unit: li.unit ?? 'lump_sum',
+            }))
+          }
+          currentBaseSubtotal={p.baseSubtotal}
+          onApplyMargin={(pct) => p.setMarkupPct(pct)}
+        />
+        </div>
       </div>
 
       <div class="mt-6 flex items-center justify-between">
@@ -1162,6 +1182,7 @@ function ReviewStep(p: {
   marginAmount: () => number;
   markupPct: () => number;
   lineItems: () => LineItem[];
+  scopeSummary: () => string;
   clientName: () => string;
   clientContact: () => string;
   clientContactEmail: () => string;
@@ -1365,6 +1386,14 @@ function ReviewStep(p: {
               </For>
             </ul>
           </div>
+
+          <CoverNotePanel
+            scopeSummary={p.scopeSummary}
+            clientName={p.clientName}
+            contactName={p.clientContact}
+            projectTitle={p.projectTitle}
+            total={p.total}
+          />
 
           {/* Letterhead snippet */}
           <div class="rounded-xl bg-[color:var(--color-surface-2)] px-4 py-3 text-[12px] text-[color:var(--color-muted)] leading-relaxed font-serif">

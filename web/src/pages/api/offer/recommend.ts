@@ -31,14 +31,17 @@ export const POST: APIRoute = async ({ request, locals }) => {
   } catch {
     return json({ error: 'Invalid JSON' }, 400);
   }
-  if (!body.quote_id) return json({ error: 'quote_id required' }, 400);
 
   const svc = supabaseService(env, 'service');
 
-  // If scope_summary not provided, pull from the quote.
+  // Two call modes:
+  //   (a) operator has saved a quote — pass quote_id, we pull scope + items
+  //   (b) operator is still editing in the Pricing step — pass scope +
+  //       items directly (no quote_id yet). We compute but don't persist
+  //       an offer_recommendations row because there's no parent quote.
   let scope = body.scope_summary;
   let items = body.line_items_preview;
-  if (!scope || !items) {
+  if (body.quote_id) {
     const { data: q } = await svc
       .from('quotes')
       .select('scope_summary')
@@ -58,6 +61,10 @@ export const POST: APIRoute = async ({ request, locals }) => {
         unit: r.unit ?? 'lump_sum',
       }));
     }
+  } else {
+    if (!scope || !items?.length) {
+      return json({ error: 'either quote_id or (scope_summary + line_items_preview) required' }, 400);
+    }
   }
 
   const rec = await recommendOffer(env, svc, locals.membership.shop_id, {
@@ -66,18 +73,20 @@ export const POST: APIRoute = async ({ request, locals }) => {
     service_line_hint: body.service_line_hint,
   });
 
-  await svc.from('offer_recommendations').insert({
-    shop_id: locals.membership.shop_id,
-    quote_id: body.quote_id,
-    lookup_spec: rec.lookup_spec,
-    computed: rec.computed,
-    rationale_text: rec.rationale_text,
-    citations: rec.citations,
-    recommended_low: rec.recommended_low,
-    recommended_center: rec.recommended_center,
-    recommended_high: rec.recommended_high,
-    confidence: rec.confidence,
-  });
+  if (body.quote_id) {
+    await svc.from('offer_recommendations').insert({
+      shop_id: locals.membership.shop_id,
+      quote_id: body.quote_id,
+      lookup_spec: rec.lookup_spec,
+      computed: rec.computed,
+      rationale_text: rec.rationale_text,
+      citations: rec.citations,
+      recommended_low: rec.recommended_low,
+      recommended_center: rec.recommended_center,
+      recommended_high: rec.recommended_high,
+      confidence: rec.confidence,
+    });
+  }
 
   return json(rec, 200);
 };
