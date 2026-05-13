@@ -710,7 +710,7 @@ function IntakeStep(p: {
             type="email"
             value={p.clientContactEmail()}
             onInput={(e) => p.setClientContactEmail(e.currentTarget.value)}
-            placeholder="diane@halsted.com"
+            placeholder="client@example.com"
           />
         </Field>
         <Field label="Contact phone (optional)" helper="For SMS reminders.">
@@ -2035,7 +2035,7 @@ function ReviewStep(p: {
                         type="email"
                         value={p.clientContactEmail()}
                         onInput={(e) => p.setClientContactEmail(e.currentTarget.value)}
-                        placeholder="diane@halsted.com"
+                        placeholder="client@example.com"
                       />
                     </Field>
                     <Field label="Contact name (optional)">
