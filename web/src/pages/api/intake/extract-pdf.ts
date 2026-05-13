@@ -52,7 +52,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
 
   const env = locals.runtime?.env;
   const trimmed = text.trim();
-  const metadata = env ? await extractIntakeMetadata(env, trimmed) : null;
+  const extract = env ? await extractIntakeMetadata(env, trimmed) : null;
 
   return json(
     {
@@ -62,7 +62,10 @@ export const POST: APIRoute = async ({ request, locals }) => {
       // Most PDFs that come back empty are scanned images; surface that
       // honestly so the UI can suggest the voice / paste alternative.
       empty_text: trimmed.length === 0,
-      metadata,
+      metadata: extract?.metadata ?? null,
+      // Inline diagnostic envelope — surfaces in DevTools so silent
+      // extraction failures are debuggable from the browser.
+      metadata_debug: extract?.debug ?? null,
     },
     200,
   );
