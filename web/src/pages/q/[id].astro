@@ -147,6 +147,10 @@ const sentDate = quote.sent_at
         margin: 0 auto;
         padding: 48px 24px 64px;
       }
+      @media (max-width: 540px) {
+        .frame { padding: 28px 16px 48px; }
+        h1 { font-size: 26px; }
+      }
       header.shop {
         display: flex;
         align-items: baseline;
@@ -224,9 +228,11 @@ const sentDate = quote.sent_at
         background: var(--surface);
         border: 1px solid var(--line);
         border-radius: 12px;
-        overflow: hidden;
+        overflow-x: auto;   /* tables can be wider than narrow phones */
         margin-bottom: 24px;
       }
+      .lines table { min-width: 100%; }
+      .lines td, .lines th { word-break: break-word; }
       .lines header {
         padding: 14px 22px;
         border-bottom: 1px solid var(--line);
