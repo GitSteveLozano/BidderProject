@@ -34,6 +34,19 @@ interface LineItem {
   subtotal: number;
 }
 
+interface Phase {
+  name: string;
+  deliverables?: string[];
+  duration?: string | null;
+  fee?: number | null;
+}
+
+interface RebateTerm {
+  product: string;
+  rebate: string;
+  basis: string;
+}
+
 interface BidBody {
   ref?: string;
   date?: string;
@@ -43,6 +56,13 @@ interface BidBody {
   project_address?: string;
   scope_summary?: string;
   line_items: LineItem[];
+  /** Non-itemized proposals (consulting/partnership) render phases
+   * + rebate_terms in place of the line-items table. */
+  phases?: Phase[] | null;
+  rebate_terms?: RebateTerm[] | null;
+  proposal_style?: 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown' | null;
+  program_type?: 'one_off' | 'recurring' | 'rebate' | null;
+  term_months?: number | null;
   total: number;
   shop?: {
     legal_name?: string;
@@ -87,6 +107,124 @@ function esc(s: unknown): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/**
+ * Picks the right priced-section format based on what the wizard
+ * sent. A partnership pitch has rebate_terms; a consulting proposal
+ * has phases with fees; a project quote has line items. Some docs
+ * have a mix (a partnership with a transition-plan phase list);
+ * render every populated section.
+ */
+function renderBody(b: BidBody): string {
+  const sections: string[] = [];
+
+  if (b.phases && b.phases.length > 0) {
+    const rows = b.phases
+      .map((ph, i) => {
+        const deliverables =
+          ph.deliverables && ph.deliverables.length > 0
+            ? `<ul style="margin:4px 0 0 14px;padding:0;color:var(--muted);font-size:10px;line-height:1.5">${ph.deliverables
+                .map((d) => `<li>${esc(d)}</li>`)
+                .join('')}</ul>`
+            : '';
+        const feeCell =
+          ph.fee != null
+            ? `<td class="num">${esc(fmt(Number(ph.fee)))}</td>`
+            : `<td class="num" style="color:var(--muted-2)">—</td>`;
+        return `
+          <tr>
+            <td style="width:32px;color:var(--muted-2);font-family:'Geist Mono',monospace;font-size:9px">${String(i + 1).padStart(2, '0')}</td>
+            <td>
+              <div style="font-weight:500">${esc(ph.name)}</div>
+              ${deliverables}
+            </td>
+            <td class="num" style="color:var(--muted)">${esc(ph.duration ?? '')}</td>
+            ${feeCell}
+          </tr>`;
+      })
+      .join('');
+    sections.push(`
+      <h2>Phases &amp; deliverables</h2>
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Phase</th>
+            <th class="num">Duration</th>
+            <th class="num">Fee</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`);
+  }
+
+  if (b.rebate_terms && b.rebate_terms.length > 0) {
+    const termsHeader = b.term_months
+      ? `<p class="scope-body" style="color:var(--muted);font-size:10px;margin-top:-4px">Term: ${b.term_months} months</p>`
+      : '';
+    const rows = b.rebate_terms
+      .map(
+        (rt) => `
+          <tr>
+            <td>${esc(rt.product)}</td>
+            <td class="num">${esc(rt.rebate)}</td>
+            <td style="color:var(--muted)">${esc(rt.basis)}</td>
+          </tr>`,
+      )
+      .join('');
+    sections.push(`
+      <h2>Rebate program</h2>
+      ${termsHeader}
+      <table>
+        <thead>
+          <tr>
+            <th>Product</th>
+            <th class="num">Rebate</th>
+            <th>Basis</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`);
+  }
+
+  if (b.line_items && b.line_items.length > 0) {
+    const rows = b.line_items
+      .map(
+        (li) => `
+          <tr>
+            <td>${esc(li.description)}</td>
+            <td class="num">${esc(li.qty.toLocaleString())}</td>
+            <td class="num" style="color:var(--muted)">${esc(li.unit ?? '')}</td>
+            <td class="num">${esc(fmt(li.unit_price))}</td>
+            <td class="num">${esc(fmt(li.subtotal))}</td>
+          </tr>`,
+      )
+      .join('');
+    sections.push(`
+      <h2>Line items</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Description</th>
+            <th class="num">Qty</th>
+            <th class="num">Unit</th>
+            <th class="num">Unit price</th>
+            <th class="num">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`);
+  }
+
+  if (sections.length === 0) {
+    // Last resort — empty proposal. Better than rendering an
+    // empty line-items table that confuses the reader.
+    return `<p class="scope-body" style="color:var(--muted);font-style:italic">
+      No priced sections yet — see the scope above.
+    </p>`;
+  }
+  return sections.join('\n');
 }
 
 function renderBid(b: BidBody): string {
@@ -265,32 +403,7 @@ function renderBid(b: BidBody): string {
 
       ${b.scope_summary ? `<h2>Scope</h2><p class="scope-body">${esc(b.scope_summary)}</p>` : ''}
 
-      <h2>Line items</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Description</th>
-            <th class="num">Qty</th>
-            <th class="num">Unit</th>
-            <th class="num">Unit price</th>
-            <th class="num">Subtotal</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${b.line_items
-            .map(
-              (li) => `
-            <tr>
-              <td>${esc(li.description)}</td>
-              <td class="num">${esc(li.qty.toLocaleString())}</td>
-              <td class="num" style="color:var(--muted)">${esc(li.unit ?? '')}</td>
-              <td class="num">${esc(fmt(li.unit_price))}</td>
-              <td class="num">${esc(fmt(li.subtotal))}</td>
-            </tr>`,
-            )
-            .join('')}
-        </tbody>
-      </table>
+      ${renderBody(b)}
 
       <div class="totals">
         <span class="total-label">Total</span>
