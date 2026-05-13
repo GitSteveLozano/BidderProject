@@ -1,101 +1,299 @@
 ---
-import Base from '@/layouts/Base.astro';
+/**
+ * GET / — marketing landing.
+ *
+ * Split by auth state:
+ *   - Signed in: redirect to /dashboard.
+ *   - Signed out: render this page. Public, prerendered would be
+ *     fine but we keep it SSR so the redirect works.
+ *
+ * Editorial voice, paper palette. Inline layout — Base.astro carries
+ * the in-app header nav which doesn't belong here.
+ */
+import '@/styles/tokens.css';
+
+export const prerender = false;
+
+if (Astro.locals.user) {
+  return Astro.redirect('/dashboard');
+}
 ---
 
-<Base title="Brief">
-  <!-- Hero -->
-  <section class="py-12 sm:py-20">
-    <div class="max-w-3xl">
-      <span class="inline-flex items-center gap-2 rounded-full bg-accent-50 px-3 py-1 text-xs font-medium text-accent-700">
-        <span class="size-2 rounded-full bg-accent-500"></span>
-        9 specialized agents · tool-grounded numerics · payroll-integrated
-      </span>
-      <h1 class="mt-4 text-4xl sm:text-5xl font-semibold tracking-tight text-ink-900">
-        Bid generation, capacity-aware pricing,
-        <span class="text-accent-600">job-cost reconciliation.</span>
-      </h1>
-      <p class="mt-4 text-lg text-ink-600">
-        Multi-agent AI platform for SMB specialty contractors. Eight specialized
-        agents coordinate over a shared context store. Pricing tools query real
-        loaded labor data — they never generate numbers. Every reconciled job
-        compounds the margin profile that feeds the next bid.
-      </p>
-      <div class="mt-8 flex flex-wrap gap-3">
-        <a
-          href="/generate"
-          class="inline-flex items-center gap-2 rounded-md bg-accent-600 px-5 py-2.5 text-white font-medium hover:bg-accent-700"
-        >
-          Generate a bid →
+<!doctype html>
+<html lang="en" data-theme="paper">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Brief — quotes that don't get dropped</title>
+    <meta
+      name="description"
+      content="Brief reads the scope, drafts the quote, watches for opens, nudges when it's time. For shops, agencies, studios, and anyone who quotes for a living."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body class="min-h-screen bg-[color:var(--color-bg)] text-[color:var(--color-ink)] font-sans antialiased">
+    <!-- Top bar -->
+    <header class="border-b border-[color:var(--color-line)] bg-[color:var(--color-surface)]/60 backdrop-blur sticky top-0 z-10">
+      <div class="mx-auto max-w-6xl px-4 py-3.5 flex items-center justify-between">
+        <a href="/" class="flex items-center gap-2.5">
+          <div
+            class="w-7 h-7 rounded-md bg-[color:var(--color-ink)] text-[color:var(--color-bg)] grid place-items-center font-serif italic font-semibold text-[16px] leading-none"
+          >B</div>
+          <span class="font-serif text-[20px] font-medium leading-none tracking-tight">
+            Brief
+          </span>
         </a>
-        <a
-          href="/bids"
-          class="inline-flex items-center gap-2 rounded-md border border-ink-300 bg-white px-5 py-2.5 font-medium hover:bg-ink-100"
-        >
-          Browse seeded bids
-        </a>
-        <a
-          href="https://github.com/GitSteveLozano/BidderProject/blob/main/docs/brief.md"
-          target="_blank"
-          class="inline-flex items-center gap-2 rounded-md border border-ink-300 bg-white px-5 py-2.5 font-medium hover:bg-ink-100"
-        >
-          Read the brief
-        </a>
+        <nav class="flex items-center gap-3 text-[13px]">
+          <a
+            href="/auth/signin"
+            class="text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)] px-2 py-1"
+          >
+            Sign in
+          </a>
+          <a
+            href="/auth/signin?next=/onboarding"
+            class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] font-medium hover:brightness-95"
+          >
+            Start free
+          </a>
+        </nav>
       </div>
-    </div>
-  </section>
+    </header>
 
-  <!-- The 5 layers -->
-  <section class="py-12 border-t border-ink-200">
-    <h2 class="text-2xl font-semibold tracking-tight">The five layers</h2>
-    <p class="mt-2 text-ink-600">Each owns a specific subset of the eight agents.</p>
-    <div class="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-      {[
-        { n: 1, title: 'Contextual Onboarding', body: 'Voice, service lines, exclusions templates extracted from past quotes.', agents: 'Intake · Context' },
-        { n: 2, title: 'Bid Generation', body: 'Scope → polished bid in voice with tool-grounded pricing.', agents: 'Intake · Context · Pricing · Composition' },
-        { n: 3, title: 'Follow-up', body: 'Segment-aware cadence: single soft touch (repeat) or 3-touch (cold).', agents: 'Follow-up' },
-        { n: 4, title: 'Job-Cost Reconciliation', body: 'Quoted vs delivered margin via ProService payroll integration.', agents: 'JCR' },
-        { n: 5, title: 'Operating Intelligence', body: 'Capacity-aware synthesis across the corpus, async + batched.', agents: 'Intelligence (meta)' },
-      ].map(({ n, title, body, agents }) => (
-        <div class="rounded-lg border border-ink-200 bg-white p-5">
-          <div class="flex items-center gap-2 text-sm font-medium text-accent-600">
-            Layer {n}
+    <!-- Hero -->
+    <section class="border-b border-[color:var(--color-line)]">
+      <div class="mx-auto max-w-6xl px-4 py-20 sm:py-28 grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-12 items-center">
+        <div>
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-3">
+            Brief · v1
           </div>
-          <div class="mt-1 font-semibold text-ink-900">{title}</div>
-          <p class="mt-2 text-sm text-ink-600">{body}</p>
-          <div class="mt-3 text-xs font-mono text-ink-500">{agents}</div>
+          <h1 class="font-serif text-[44px] sm:text-[64px] font-medium leading-[1.05] tracking-tight">
+            Quotes that don't <em>get dropped</em>.
+          </h1>
+          <p class="mt-5 text-[17px] sm:text-[19px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[52ch]">
+            Brief reads the scope, drafts the quote, watches for opens, and
+            nudges when it's time. You stay the one who hits send.
+            For specialty shops, agencies, studios — anyone who quotes for a living.
+          </p>
+          <div class="mt-8 flex flex-wrap gap-3">
+            <a
+              href="/auth/signin?next=/onboarding"
+              class="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] font-medium text-[15px] hover:brightness-95"
+            >
+              Start free with Google
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                <path d="M2 7h10M8 3l4 4-4 4" />
+              </svg>
+            </a>
+            <a
+              href="/auth/signin"
+              class="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] font-medium text-[15px] hover:bg-[color:var(--color-surface-2)]"
+            >
+              Sign in
+            </a>
+          </div>
+          <p class="mt-5 text-[13px] text-[color:var(--color-muted)] font-mono">
+            Free during open beta. Two minutes to set up.
+          </p>
         </div>
-      ))}
-    </div>
-  </section>
 
-  <!-- Why not a GPT wrapper -->
-  <section class="py-12 border-t border-ink-200">
-    <h2 class="text-2xl font-semibold tracking-tight">
-      Why this is <em>not</em> a GPT wrapper
-    </h2>
-    <div class="mt-6 grid gap-4 md:grid-cols-3">
-      <div class="rounded-lg border border-ink-200 bg-white p-5">
-        <h3 class="font-semibold">Specialization</h3>
-        <p class="mt-2 text-sm text-ink-600">
-          Routing + extraction on Haiku 4.5. Synthesis on Sonnet 4.6.
-          Each agent uses the model best suited to its task.
-        </p>
+        <!-- Editorial right pane — mocked quote card -->
+        <aside class="hidden lg:block">
+          <div class="rounded-2xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-7 shadow-[var(--shadow-md)] relative">
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-1.5">
+              Brief drafted a reply
+            </div>
+            <h3 class="font-serif text-[19px] font-medium leading-tight">
+              Halsted &amp; Sons · Q-2026-0184
+            </h3>
+            <p class="mt-4 text-[14px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
+              Priya — appreciate the quick read on the spec. To your question on
+              the sand-float finish: we'd run it over the brown coat with a
+              tighter grit so it reads cleaner up close. Adds a half-day to
+              the schedule, no material impact.
+            </p>
+            <p class="mt-3 text-[14px] font-serif italic text-[color:var(--color-muted)]">
+              — Cavy
+            </p>
+            <div class="mt-5 pt-4 border-t border-[color:var(--color-line)] flex items-center gap-2 text-[11.5px] font-mono uppercase tracking-wide text-[color:var(--color-muted)]">
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" class="text-[color:var(--color-accent)]" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                <path d="M7 1l1.6 4.3h4.4l-3.5 2.8 1.3 4.3-3.8-2.6-3.8 2.6 1.3-4.3-3.5-2.8h4.4z" />
+              </svg>
+              Why this draft.
+              <span class="text-[color:var(--color-muted-2)] font-sans normal-case tracking-normal">
+                Priya read the PDF on the day it landed but hasn't opened it since.
+              </span>
+            </div>
+          </div>
+          <div class="absolute -bottom-3 -right-3 rounded-full bg-[color:var(--color-surface-2)] border border-[color:var(--color-line-2)] px-3 py-1.5 font-mono text-[11px] text-[color:var(--color-muted)] shadow-sm rotate-[-1.5deg]">
+            edit anything · you hit send
+          </div>
+        </aside>
       </div>
-      <div class="rounded-lg border border-ink-200 bg-white p-5">
-        <h3 class="font-semibold">Tool-grounded numerics</h3>
-        <p class="mt-2 text-sm text-ink-600">
-          Pricing never <em>generates</em> labor cost. It calls
-          <code class="bg-ink-100 px-1 rounded text-xs">get_loaded_labor_cost(trade, hours)</code>
-          which returns real burdened payroll data.
-        </p>
+    </section>
+
+    <!-- How it works -->
+    <section class="border-b border-[color:var(--color-line)]">
+      <div class="mx-auto max-w-6xl px-4 py-20">
+        <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
+          How it works
+        </div>
+        <h2 class="font-serif text-[32px] sm:text-[40px] font-medium leading-tight tracking-tight max-w-[18ch]">
+          Three steps, then Brief earns its keep.
+        </h2>
+
+        <div class="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
+          {[
+            {
+              n: '01',
+              title: 'Show Brief one piece of past work.',
+              body: 'Drop a PDF, paste your site, or record a walk-through. Brief learns your voice — the way you scope, the way you sign off.',
+            },
+            {
+              n: '02',
+              title: 'Drop a new scope. Brief drafts.',
+              body: 'PDF, voice, or paste. Brief reads it, pulls line items with confidence flags, prices them against your defaults. You edit anything, then send.',
+            },
+            {
+              n: '03',
+              title: 'Brief watches the quote home.',
+              body: 'Opens, replies, days quiet — Brief drafts the right next message in your voice. You hit send. Jobs come in, costs reconcile, change orders track.',
+            },
+          ].map((s) => (
+            <article class="rounded-2xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-7">
+              <div class="font-mono text-[12px] text-[color:var(--color-accent)] tracking-[0.08em]">
+                {s.n}
+              </div>
+              <h3 class="mt-2 font-serif text-[20px] font-medium leading-tight">
+                {s.title}
+              </h3>
+              <p class="mt-3 text-[14.5px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
+                {s.body}
+              </p>
+            </article>
+          ))}
+        </div>
       </div>
-      <div class="rounded-lg border border-ink-200 bg-white p-5">
-        <h3 class="font-semibold">Closed-loop intelligence</h3>
-        <p class="mt-2 text-sm text-ink-600">
-          Every reconciled job updates the margin profile that feeds the next
-          bid. Only ProService has this — no PEO substitute exists.
-        </p>
+    </section>
+
+    <!-- What's in it -->
+    <section class="border-b border-[color:var(--color-line)]">
+      <div class="mx-auto max-w-6xl px-4 py-20">
+        <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
+          What's in it
+        </div>
+        <h2 class="font-serif text-[32px] sm:text-[40px] font-medium leading-tight tracking-tight max-w-[18ch]">
+          The bid-to-job loop, kept honest.
+        </h2>
+
+        <div class="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {[
+            {
+              title: 'Drafts in your voice',
+              body: 'Reply, nudge, status update, check-in — every outbound starts as a Brief draft grounded in your past writing and the actual thread.',
+            },
+            {
+              title: 'Per-line pricing',
+              body: 'Cost basis + per-line margin overrides. Labor at one %, materials at another, subs to absorb their overhead. Default for the simple cases, override for the rest.',
+            },
+            {
+              title: 'Real public client view',
+              body: 'Send a quote and clients read a real page (not a PDF in their downloads folder). Opens tracked, no Read-receipt-creep.',
+            },
+            {
+              title: 'Multi-contact, multi-recipient',
+              body: 'Owner, PM, accounts payable — set them up once, every send fans out. No more "did you copy Diane on this?"',
+            },
+            {
+              title: 'Cost reconciliation',
+              body: 'Quoted-vs-actual per line, auto-synced from payroll + receipts. Variance flags before the project goes red.',
+            },
+            {
+              title: 'Change orders, real ones',
+              body: 'Scope creep doesn\'t happen in the dark. CO state machine — proposed, sent, approved — rolls the contracted total without obscuring the original bid.',
+            },
+          ].map((f) => (
+            <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-6">
+              <h3 class="font-serif text-[17px] font-medium leading-tight">{f.title}</h3>
+              <p class="mt-2 text-[13.5px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
+                {f.body}
+              </p>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
-  </section>
-</Base>
+    </section>
+
+    <!-- Built for -->
+    <section class="border-b border-[color:var(--color-line)]">
+      <div class="mx-auto max-w-6xl px-4 py-16 grid grid-cols-1 md:grid-cols-[1fr_1.4fr] gap-10 items-start">
+        <div>
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
+            Who it's for
+          </div>
+          <h2 class="font-serif text-[28px] sm:text-[32px] font-medium leading-tight tracking-tight">
+            If you quote for a living, Brief was built for you.
+          </h2>
+        </div>
+        <ul class="grid grid-cols-2 gap-x-6 gap-y-3 text-[14.5px] font-serif text-[color:var(--color-ink-2)]">
+          <li class="flex items-center gap-2">
+            <span class="w-1 h-1 rounded-full bg-[color:var(--color-accent)]" aria-hidden="true" />
+            Specialty contractors
+          </li>
+          <li class="flex items-center gap-2">
+            <span class="w-1 h-1 rounded-full bg-[color:var(--color-accent)]" aria-hidden="true" />
+            Marketing agencies
+          </li>
+          <li class="flex items-center gap-2">
+            <span class="w-1 h-1 rounded-full bg-[color:var(--color-accent)]" aria-hidden="true" />
+            Design studios
+          </li>
+          <li class="flex items-center gap-2">
+            <span class="w-1 h-1 rounded-full bg-[color:var(--color-accent)]" aria-hidden="true" />
+            Law firms (transactional)
+          </li>
+          <li class="flex items-center gap-2">
+            <span class="w-1 h-1 rounded-full bg-[color:var(--color-accent)]" aria-hidden="true" />
+            Consultancies
+          </li>
+          <li class="flex items-center gap-2">
+            <span class="w-1 h-1 rounded-full bg-[color:var(--color-accent)]" aria-hidden="true" />
+            Independent practices
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Closing CTA -->
+    <section>
+      <div class="mx-auto max-w-3xl px-4 py-24 text-center">
+        <h2 class="font-serif text-[36px] sm:text-[48px] font-medium leading-tight tracking-tight">
+          Two minutes to set up. Free during open beta.
+        </h2>
+        <p class="mt-4 text-[15px] sm:text-[16px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[48ch] mx-auto">
+          Sign in with Google. Drop a sample of your work. Brief reads it
+          and gets out of your way.
+        </p>
+        <div class="mt-7 flex flex-wrap justify-center gap-3">
+          <a
+            href="/auth/signin?next=/onboarding"
+            class="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] font-medium text-[15px] hover:brightness-95"
+          >
+            Start free with Google
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+              <path d="M2 7h10M8 3l4 4-4 4" />
+            </svg>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="border-t border-[color:var(--color-line)] bg-[color:var(--color-surface-2)]/60">
+      <div class="mx-auto max-w-6xl px-4 py-8 flex flex-wrap items-center justify-between gap-2 text-[13px] text-[color:var(--color-muted)]">
+        <span class="font-mono">Brief proposes; you decide.</span>
+        <span class="font-mono text-[color:var(--color-muted-2)]">v1.0</span>
+      </div>
+    </footer>
+  </body>
+</html>
