@@ -17,7 +17,7 @@ if (!user || !membership || !env) {
 const svc = supabaseService(env, 'service');
 const { data: shop } = await svc
   .from('shops')
-  .select('legal_name, trade_name, owner_name, data_state')
+  .select('legal_name, trade_name, owner_name, data_state, default_markup_pct')
   .eq('id', membership.shop_id)
   .maybeSingle();
 
@@ -33,6 +33,7 @@ const normalized = (jobs ?? []).map((j) => ({
   actual_total: Number(j.actual_total ?? 0),
   variance: Number(j.variance ?? 0),
   variance_pct: j.variance_pct == null ? null : Number(j.variance_pct),
+  change_order_total: Number(j.change_order_total ?? 0),
 }));
 
 const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
@@ -50,5 +51,9 @@ const liveJobs = normalized.filter((j) => j.state === 'INPROGRESS' || j.state ==
   dataState={shop?.data_state ?? 'cold-start'}
   liveJobs={liveJobs}
 >
-  <JobsView client:load jobs={normalized} />
+  <JobsView
+    client:load
+    jobs={normalized}
+    shop_default_margin_pct={Number(shop?.default_markup_pct ?? 32)}
+  />
 </Brief>

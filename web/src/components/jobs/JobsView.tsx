@@ -11,6 +11,7 @@ import { fmtCurrencyFull } from '@/lib/quote-helpers';
 import StatusPill, { type JobState } from '@/components/ui/StatusPill';
 import Pill from '@/components/ui/Pill';
 import JobActionDrawer, { type JobActionMode } from '@/components/jobs/JobActionDrawer';
+import ChangeOrders from '@/components/jobs/ChangeOrders';
 
 interface JobRow {
   id: string;
@@ -27,6 +28,9 @@ interface JobRow {
   variance: number;
   variance_pct: number | null;
   payroll_synced_at: string | null;
+  /** Sum of APPROVED change orders against this job. Maintained by
+   * trigger when COs flip state — see migration 006. */
+  change_order_total: number;
 }
 
 interface CostLine {
@@ -40,6 +44,9 @@ interface CostLine {
 
 interface Props {
   jobs: JobRow[];
+  /** Shop-level default margin %; used as fallback for change-order
+   * lines that don't have an override. */
+  shop_default_margin_pct: number;
 }
 
 async function loadCostLines(jobId: string): Promise<CostLine[]> {
@@ -138,6 +145,7 @@ export default function JobsView(props: Props) {
                 costLines={() => costLines() ?? []}
                 onUpdate={updateActual}
                 onAction={openDrawer}
+                shop_default_margin_pct={props.shop_default_margin_pct}
               />
             </Show>
           </main>
@@ -172,13 +180,21 @@ function Detail(p: {
   costLines: () => CostLine[];
   onUpdate: (lineId: string, value: number) => void;
   onAction: (mode: JobActionMode) => void;
+  shop_default_margin_pct: number;
 }) {
   const totalActual = createMemo(() =>
     p.costLines().reduce((s, c) => s + Number(c.actual ?? 0), 0),
   );
-  const variance = createMemo(() => totalActual() - p.job.estimated_total);
+  // Variance is measured against the CONTRACTED total (original bid +
+  // approved change orders). A CO that lands mid-job re-baselines
+  // expectations; comparing actuals to the pre-CO bid would
+  // misleadingly flag overruns that the client already approved.
+  const contractedTotal = createMemo(
+    () => p.job.estimated_total + p.job.change_order_total,
+  );
+  const variance = createMemo(() => totalActual() - contractedTotal());
   const variancePct = createMemo(() =>
-    p.job.estimated_total > 0 ? (variance() / p.job.estimated_total) * 100 : null,
+    contractedTotal() > 0 ? (variance() / contractedTotal()) * 100 : null,
   );
   const varColor = () => {
     const v = variancePct();
@@ -206,14 +222,15 @@ function Detail(p: {
     const now = Date.now();
     return Math.max(1, Math.min(99, Math.round(((now - t0) / (t1 - t0)) * 100)));
   });
-  // Projected margin = (quoted - projected_actual_total) / quoted * 100,
+  // Projected margin = (contracted - projected_actual_total) / contracted * 100,
   // where projected_actual_total scales current actuals to 100% complete.
+  // Uses the contracted total so approved COs lift the ceiling.
   const projectedMargin = createMemo(() => {
-    if (p.job.estimated_total <= 0) return null;
+    if (contractedTotal() <= 0) return null;
     const pct = pctComplete();
     if (pct === 0) return null;
     const projectedTotal = totalActual() / (pct / 100);
-    return ((p.job.estimated_total - projectedTotal) / p.job.estimated_total) * 100;
+    return ((contractedTotal() - projectedTotal) / contractedTotal()) * 100;
   });
 
   const ranOver = () => (variancePct() ?? 0) > 5;
@@ -279,7 +296,13 @@ function Detail(p: {
 
       {/* KPI tiles — Quoted, Actual, Projected margin (mockup 02-cost-recon.png) */}
       <div class="mt-7 grid grid-cols-3 gap-3">
-        <Tile label="Quoted" value={fmtCurrencyFull(p.job.estimated_total)} />
+        <Tile
+          label="Contracted"
+          value={fmtCurrencyFull(p.job.estimated_total + p.job.change_order_total)}
+          sub={p.job.change_order_total > 0
+            ? `${fmtCurrencyFull(p.job.estimated_total)} bid + ${fmtCurrencyFull(p.job.change_order_total)} change orders`
+            : `${fmtCurrencyFull(p.job.estimated_total)} original bid`}
+        />
         <Tile
           label={p.job.state === 'CLOSED' ? 'Actual' : 'Actuals so far'}
           value={fmtCurrencyFull(totalActual())}
@@ -371,6 +394,10 @@ function Detail(p: {
           </tbody>
         </table>
         </div>
+      </div>
+
+      <div class="mt-7">
+        <ChangeOrders job_id={p.job.id} shop_default_margin_pct={p.shop_default_margin_pct} />
       </div>
     </div>
   );
