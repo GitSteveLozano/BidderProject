@@ -33,9 +33,19 @@ const EMPTY: IntakeMetadata = {
   project_address: null,
 };
 
-const SYSTEM = `You read a construction-scope document (RFP, client email, or
-walk-through transcript) and extract the six fields below. Return ONLY a
-JSON object of the exact shape — no fences, no preamble, no closing.
+const SYSTEM = `You read a construction document and extract the six fields below.
+The source can be any of:
+  - an RFP or scope of work the CLIENT sent to the contractor,
+  - a quote, estimate, or proposal the CONTRACTOR sent to their client,
+  - a client email, or a walk-through transcript.
+
+In every case the CLIENT is the party paying for the work (the builder,
+GC, or homeowner). It is NEVER the bidding contractor — ignore the
+contractor's own letterhead, footer, website, GST number, or signature
+block when picking client_name / contact_email / contact_phone.
+
+Return ONLY a JSON object of the exact shape — no fences, no preamble,
+no closing.
 
 {
   "client_name":     string | null,
@@ -46,20 +56,30 @@ JSON object of the exact shape — no fences, no preamble, no closing.
   "project_address": string | null
 }
 
+Where to look:
+- client_name: the addressee. Common labels that introduce it include
+  "Bill To", "Sold To", "ATTN", "Attention", "TO:", "Customer",
+  "Client", "Quote Address", "Prepared For", "Re:" — take the
+  company or person named right after one of those.
+- contact_name: a named individual on the client side, if present;
+  distinct from client_name when client_name is a company.
+- contact_email / contact_phone: the client-side email or phone. Skip
+  anything in the contractor's letterhead or footer. E.164 phone
+  format if possible (+15551234567); otherwise return what you see.
+- project_title: take whatever follows a "Project", "Project Name",
+  "Job", "Job Name", or "Re:" label, verbatim. A street address is a
+  perfectly valid project_title when that's all the document gives
+  you. Only fall back to a short descriptive phrase ("Two-story
+  addition", "Stucco repair — west wall") if no such label exists.
+  Do NOT return boilerplate like "Scope of Work", "Quote", or
+  "Proposal".
+- project_address: street address of the job site, if present. May
+  match project_title when the title IS an address.
+
 Rules:
-- client_name: the COMPANY or HOMEOWNER name commissioning the work.
-  If it's a builder/GC, use the company name (not the project owner).
-- contact_name: the specific person at the client side, if named.
-  Different from client_name when client_name is a company.
-- contact_email: their email address if it appears in the source.
-- contact_phone: their phone number if it appears. E.164 if possible
-  (+15551234567); otherwise return what you see.
-- project_title: short title for the work itself ("Two-story addition",
-  "Stucco repair — west wall"). Not the address. Not boilerplate
-  ("Scope of Work", "Proposal").
-- project_address: street address of the job site, if present.
-- Return null for any field not clearly stated in the source. Do not
-  invent. Better to return null than to guess.`;
+- Return null for any field not clearly stated. Do not invent.
+- Return values close to how they appear in the source — don't
+  rewrite or paraphrase.`;
 
 export async function extractIntakeMetadata(
   env: CloudflareEnv,
