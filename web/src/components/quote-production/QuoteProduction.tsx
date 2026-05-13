@@ -32,10 +32,12 @@ interface LineItem {
   qty: number;
   unit: string;
   unit_price: number;
-  subtotal: number;
+  subtotal: number; // cost basis: qty * unit_price
   category: string;
   confidence?: string;
   source_excerpt?: string;
+  /** Per-line margin override. null = use the quote-level markup. */
+  margin_pct?: number | null;
 }
 
 interface Flag {
@@ -82,14 +84,21 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   const [quoteRef, setQuoteRef] = createSignal<string | null>(null);
   const [sendError, setSendError] = createSignal<string | null>(null);
 
-  // Derived totals
+  // Derived totals — per-line margin overrides the global. A null
+  // margin_pct on a line falls back to the quote-level markupPct.
   const baseSubtotal = createMemo(() =>
     lineItems().reduce((s, li) => s + li.subtotal, 0),
   );
-  const marginAmount = createMemo(() =>
-    Math.round(baseSubtotal() * (markupPct() / 100) * 100) / 100,
+  const total = createMemo(() =>
+    round(
+      lineItems().reduce((s, li) => {
+        const m = li.margin_pct != null ? li.margin_pct : markupPct();
+        return s + li.subtotal * (1 + m / 100);
+      }, 0),
+      2,
+    ),
   );
-  const total = createMemo(() => round(baseSubtotal() + marginAmount(), 2));
+  const marginAmount = createMemo(() => round(total() - baseSubtotal(), 2));
 
   const startScan = async () => {
     setLineItems([]);
@@ -163,6 +172,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
         subtotal: 0,
         category: 'other',
         confidence: 'manual',
+        margin_pct: null,
       },
     ]);
   };
@@ -180,7 +190,18 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           project_title: projectTitle(),
           project_address: projectAddress(),
           scope_summary: scopeSummary(),
-          line_items: lineItems(),
+          // Pre-apply per-line margin so the PDF shows the customer-
+          // facing price per line. unit_price stays as cost basis on
+          // the wizard; the PDF only needs the all-in line subtotal.
+          line_items: lineItems().map((li) => {
+            const m = li.margin_pct != null ? li.margin_pct : markupPct();
+            const lineTotal = round(li.subtotal * (1 + m / 100), 2);
+            return {
+              ...li,
+              unit_price: round(li.unit_price * (1 + m / 100), 2),
+              subtotal: lineTotal,
+            };
+          }),
           total: total(),
           shop: props.shop,
         }),
@@ -950,55 +971,77 @@ function PricingStep(p: {
         Confirm the numbers.
       </h1>
 
-      <div class="mt-6 grid grid-cols-[1fr_320px] gap-6">
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)]">
-          <div class="grid grid-cols-[3fr_70px_80px_110px_100px_40px] px-4 py-3 border-b border-[color:var(--color-line)] text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
+      <div class="mt-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-x-auto">
+          <div class="grid grid-cols-[3fr_60px_70px_90px_70px_100px_36px] min-w-[720px] px-4 py-3 border-b border-[color:var(--color-line)] text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
             <div>Description</div>
             <div class="text-right">Qty</div>
             <div class="text-right">Unit</div>
             <div class="text-right">Unit $</div>
-            <div class="text-right">Subtotal</div>
+            <div class="text-right">Margin</div>
+            <div class="text-right">Total</div>
             <div />
           </div>
-          <div class="divide-y divide-[color:var(--color-line)]">
+          <div class="divide-y divide-[color:var(--color-line)] min-w-[720px]">
             <For each={p.lineItems()}>
-              {(li, idx) => (
-                <div class="grid grid-cols-[3fr_70px_80px_110px_100px_40px] items-center px-4 py-2.5 gap-2 text-sm">
-                  <input
-                    class="bg-transparent border-0 outline-none px-1 py-1 focus:bg-[color:var(--color-surface-2)] rounded"
-                    value={li.description}
-                    onInput={(e) => p.updateLineItem(idx(), { description: e.currentTarget.value })}
-                  />
-                  <input
-                    type="number"
-                    step="0.01"
-                    class="bg-transparent border-0 outline-none px-1 py-1 text-right tabular-nums focus:bg-[color:var(--color-surface-2)] rounded"
-                    value={li.qty}
-                    onInput={(e) => p.updateLineItem(idx(), { qty: parseFloat(e.currentTarget.value || '0') })}
-                  />
-                  <input
-                    class="bg-transparent border-0 outline-none px-1 py-1 text-right text-xs text-[color:var(--color-muted)] focus:bg-[color:var(--color-surface-2)] rounded"
-                    value={li.unit}
-                    onInput={(e) => p.updateLineItem(idx(), { unit: e.currentTarget.value })}
-                  />
-                  <input
-                    type="number"
-                    step="0.01"
-                    class="bg-transparent border-0 outline-none px-1 py-1 text-right tabular-nums focus:bg-[color:var(--color-surface-2)] rounded"
-                    value={li.unit_price}
-                    onInput={(e) => p.updateLineItem(idx(), { unit_price: parseFloat(e.currentTarget.value || '0') })}
-                  />
-                  <div class="text-right tabular-nums font-mono">
-                    ${li.subtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              {(li, idx) => {
+                const effectiveMargin = () => (li.margin_pct != null ? li.margin_pct : p.markupPct());
+                const lineTotal = () => round(li.subtotal * (1 + effectiveMargin() / 100), 2);
+                return (
+                  <div class="grid grid-cols-[3fr_60px_70px_90px_70px_100px_36px] items-center px-4 py-2.5 gap-2 text-sm">
+                    <input
+                      class="bg-transparent border-0 outline-none px-1 py-1 focus:bg-[color:var(--color-surface-2)] rounded"
+                      value={li.description}
+                      onInput={(e) => p.updateLineItem(idx(), { description: e.currentTarget.value })}
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      class="bg-transparent border-0 outline-none px-1 py-1 text-right tabular-nums focus:bg-[color:var(--color-surface-2)] rounded"
+                      value={li.qty}
+                      onInput={(e) => p.updateLineItem(idx(), { qty: parseFloat(e.currentTarget.value || '0') })}
+                    />
+                    <input
+                      class="bg-transparent border-0 outline-none px-1 py-1 text-right text-xs text-[color:var(--color-muted)] focus:bg-[color:var(--color-surface-2)] rounded"
+                      value={li.unit}
+                      onInput={(e) => p.updateLineItem(idx(), { unit: e.currentTarget.value })}
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      class="bg-transparent border-0 outline-none px-1 py-1 text-right tabular-nums focus:bg-[color:var(--color-surface-2)] rounded"
+                      value={li.unit_price}
+                      onInput={(e) => p.updateLineItem(idx(), { unit_price: parseFloat(e.currentTarget.value || '0') })}
+                    />
+                    <div class="relative">
+                      <input
+                        type="number"
+                        step="0.5"
+                        placeholder={`${p.markupPct()}`}
+                        title={li.margin_pct == null ? `Default: ${p.markupPct()}% (quote-level). Type to override.` : `Per-line override`}
+                        class={[
+                          'w-full bg-transparent border-0 outline-none px-1 py-1 text-right tabular-nums focus:bg-[color:var(--color-surface-2)] rounded',
+                          li.margin_pct == null ? 'text-[color:var(--color-muted)]' : 'text-[color:var(--color-ink)]',
+                        ].join(' ')}
+                        value={li.margin_pct ?? ''}
+                        onInput={(e) => {
+                          const raw = e.currentTarget.value;
+                          p.updateLineItem(idx(), { margin_pct: raw === '' ? null : parseFloat(raw) });
+                        }}
+                      />
+                    </div>
+                    <div class="text-right tabular-nums font-mono">
+                      ${lineTotal().toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="Remove line item"
+                      class="text-[color:var(--color-muted)] hover:text-[color:var(--color-danger)]"
+                      onClick={() => p.removeLineItem(idx())}
+                    >×</button>
                   </div>
-                  <button
-                    type="button"
-                    aria-label="Remove line item"
-                    class="text-[color:var(--color-muted)] hover:text-[color:var(--color-danger)]"
-                    onClick={() => p.removeLineItem(idx())}
-                  >×</button>
-                </div>
-              )}
+                );
+              }}
             </For>
           </div>
           <div class="px-4 py-3 border-t border-[color:var(--color-line)]">
@@ -1008,7 +1051,7 @@ function PricingStep(p: {
 
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
           <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
-            Margin
+            Default margin
           </div>
           <div class="mt-1 flex items-baseline gap-1.5">
             <input
@@ -1020,9 +1063,12 @@ function PricingStep(p: {
             />
             <span class="text-sm text-[color:var(--color-muted)]">%</span>
           </div>
+          <p class="mt-1 text-[11.5px] text-[color:var(--color-muted)] leading-relaxed">
+            Applied to every line where you haven't set an override.
+          </p>
           <div class="mt-4 space-y-2 text-sm">
             <div class="flex justify-between">
-              <span class="text-[color:var(--color-muted)]">Subtotal</span>
+              <span class="text-[color:var(--color-muted)]">Cost subtotal</span>
               <span class="tabular-nums font-mono">
                 ${p.baseSubtotal().toLocaleString(undefined, { minimumFractionDigits: 2 })}
               </span>

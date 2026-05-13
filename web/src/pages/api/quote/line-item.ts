@@ -22,6 +22,7 @@ interface Body {
   unit?: string | null;
   category?: string | null;
   confidence?: string | null;
+  margin_pct?: number | null;
 }
 
 export const POST: APIRoute = async ({ request, locals }) => {
@@ -75,6 +76,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
       subtotal,
       category: body.category ?? null,
       confidence: body.confidence ?? 'manual',
+      margin_pct: body.margin_pct ?? null,
     })
     .select('*')
     .single();
@@ -84,12 +86,27 @@ export const POST: APIRoute = async ({ request, locals }) => {
   return json(row, 200);
 };
 
+/** Re-sum the quote total, applying each line's margin_pct override
+ * or the quote-level margin_pct as fallback. Without this, quote.total
+ * would stay at cost-basis sum and diverge from what the operator
+ * sees on the Pricing wizard. */
 async function recomputeTotal(svc: any, quoteId: string) {
+  const { data: quote } = await svc
+    .from('quotes')
+    .select('margin_pct')
+    .eq('id', quoteId)
+    .maybeSingle();
+  const quoteMargin = Number(quote?.margin_pct ?? 0);
   const { data: lis } = await svc
     .from('quote_line_items')
-    .select('subtotal')
+    .select('subtotal, margin_pct')
     .eq('quote_id', quoteId);
-  const total = round2((lis ?? []).reduce((s: number, r: any) => s + Number(r.subtotal), 0));
+  const total = round2(
+    (lis ?? []).reduce((s: number, r: any) => {
+      const m = r.margin_pct != null ? Number(r.margin_pct) : quoteMargin;
+      return s + Number(r.subtotal) * (1 + m / 100);
+    }, 0),
+  );
   await svc.from('quotes').update({ total }).eq('id', quoteId);
 }
 

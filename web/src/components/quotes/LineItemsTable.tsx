@@ -17,9 +17,11 @@ export interface LineItem {
   qty: number;
   unit: string | null;
   unit_price: number;
-  subtotal: number;
+  subtotal: number;              // cost basis: qty * unit_price
   category: string | null;
   confidence: 'high' | 'med' | 'low' | 'manual' | null;
+  /** null = use the quote-level margin. */
+  margin_pct: number | null;
 }
 
 interface Props {
@@ -27,6 +29,9 @@ interface Props {
   initial: LineItem[];
   editable: boolean;
   total: number;
+  /** Quote-level fallback margin (quotes.margin_pct). Used as the
+   * default when a line item has margin_pct = null. */
+  quote_margin_pct: number;
 }
 
 const UNITS = ['each', 'hr', 'sqft', 'lf', 'cy', 'day', 'lump_sum'] as const;
@@ -36,11 +41,19 @@ export default function LineItemsTable(props: Props) {
     [...props.initial].sort((a, b) => a.position - b.position),
   );
   const [adding, setAdding] = createSignal(false);
-  const [draft, setDraft] = createSignal({ description: '', qty: 1, unit: 'each', unit_price: 0 });
+  const [draft, setDraft] = createSignal({ description: '', qty: 1, unit: 'each', unit_price: 0, margin_pct: null as number | null });
   const [saving, setSaving] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
-  const total = createMemo(() => rows().reduce((s, r) => s + Number(r.subtotal), 0));
+  // Total = sum of (line cost × (1 + effective margin / 100)). Matches
+  // the recompute in /api/quote/line-item*.ts so the in-page number
+  // stays consistent with what the server persists to quotes.total.
+  const total = createMemo(() =>
+    rows().reduce((s, r) => {
+      const m = r.margin_pct != null ? r.margin_pct : props.quote_margin_pct;
+      return s + Number(r.subtotal) * (1 + m / 100);
+    }, 0),
+  );
 
   const patch = async (id: string, fields: Partial<LineItem>) => {
     setError(null);
@@ -98,6 +111,7 @@ export default function LineItemsTable(props: Props) {
           unit: d.unit,
           unit_price: Number(d.unit_price),
           confidence: 'manual',
+          margin_pct: d.margin_pct,
         }),
       });
       if (!resp.ok) {
@@ -106,7 +120,7 @@ export default function LineItemsTable(props: Props) {
       }
       const created: LineItem = await resp.json();
       setRows([...rows(), created]);
-      setDraft({ description: '', qty: 1, unit: 'each', unit_price: 0 });
+      setDraft({ description: '', qty: 1, unit: 'each', unit_price: 0, margin_pct: null as number | null });
       setAdding(false);
     } finally {
       setSaving(false);
@@ -131,13 +145,15 @@ export default function LineItemsTable(props: Props) {
         </Show>
       </div>
       <div class="overflow-x-auto">
-      <table class="w-full min-w-[640px]">
+      <table class="w-full min-w-[760px]">
         <thead class="bg-[color:var(--color-surface-2)]">
           <tr>
             <th class="px-3.5 py-2.5 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Description</th>
             <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Qty</th>
             <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Unit</th>
-            <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Subtotal</th>
+            <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Cost</th>
+            <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Margin</th>
+            <th class="px-3.5 py-2.5 text-right text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Total</th>
             <th class="px-3.5 py-2.5 text-left text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Conf</th>
             <Show when={props.editable}>
               <th class="px-2 py-2.5 w-8" aria-hidden="true" />
@@ -199,6 +215,39 @@ export default function LineItemsTable(props: Props) {
                 </td>
                 <td class="px-3.5 py-2 text-right text-sm font-mono tabular-nums">
                   {fmtCurrencyFull(Number(li.subtotal))}
+                </td>
+                <td class="px-3.5 py-2 text-right">
+                  <Show
+                    when={props.editable}
+                    fallback={
+                      <span class="text-sm font-mono tabular-nums text-[color:var(--color-muted)]">
+                        {li.margin_pct != null ? `${li.margin_pct.toFixed(0)}%` : `${props.quote_margin_pct.toFixed(0)}%`}
+                      </span>
+                    }
+                  >
+                    <input
+                      type="number"
+                      step="0.5"
+                      placeholder={`${props.quote_margin_pct}`}
+                      title={li.margin_pct == null ? `Default: ${props.quote_margin_pct}% (quote-level).` : 'Per-line override'}
+                      class={[
+                        'w-16 text-right bg-transparent text-sm font-mono tabular-nums outline-none focus:bg-[color:var(--color-surface-2)] rounded px-1.5 py-1',
+                        li.margin_pct == null ? 'text-[color:var(--color-muted)]' : 'text-[color:var(--color-ink)]',
+                      ].join(' ')}
+                      value={li.margin_pct ?? ''}
+                      onBlur={(e) => {
+                        const raw = e.currentTarget.value;
+                        const next = raw === '' ? null : parseFloat(raw);
+                        if (next !== li.margin_pct) patch(li.id, { margin_pct: next });
+                      }}
+                    />
+                  </Show>
+                </td>
+                <td class="px-3.5 py-2 text-right text-sm font-mono tabular-nums font-medium">
+                  {fmtCurrencyFull(
+                    Number(li.subtotal) *
+                      (1 + (li.margin_pct != null ? li.margin_pct : props.quote_margin_pct) / 100),
+                  )}
                 </td>
                 <td class="px-3.5 py-2">
                   <ConfPill confidence={li.confidence} />
@@ -264,8 +313,30 @@ export default function LineItemsTable(props: Props) {
                   onInput={(e) => setDraft({ ...draft(), unit_price: parseFloat(e.currentTarget.value) || 0 })}
                 />
               </td>
-              <td class="px-3.5 py-2 text-xs text-[color:var(--color-muted)] font-mono">
+              <td class="px-3.5 py-2 text-xs text-[color:var(--color-muted)] font-mono text-right">
                 {fmtCurrencyFull(round2(Number(draft().qty) * Number(draft().unit_price)))}
+              </td>
+              <td class="px-3.5 py-2 text-right">
+                <input
+                  type="number"
+                  step="0.5"
+                  placeholder={`${props.quote_margin_pct}`}
+                  class="w-16 text-right bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] text-sm font-mono rounded px-2 py-1.5 outline-none focus:border-[color:var(--color-accent)]"
+                  value={draft().margin_pct ?? ''}
+                  onInput={(e) => {
+                    const raw = e.currentTarget.value;
+                    setDraft({ ...draft(), margin_pct: raw === '' ? null : parseFloat(raw) });
+                  }}
+                />
+              </td>
+              <td class="px-3.5 py-2 text-right text-sm font-mono tabular-nums font-medium">
+                {fmtCurrencyFull(
+                  round2(
+                    Number(draft().qty) *
+                      Number(draft().unit_price) *
+                      (1 + (draft().margin_pct ?? props.quote_margin_pct) / 100),
+                  ),
+                )}
               </td>
               <td class="px-2 py-2 flex gap-1">
                 <button
@@ -280,7 +351,7 @@ export default function LineItemsTable(props: Props) {
                   type="button"
                   onClick={() => {
                     setAdding(false);
-                    setDraft({ description: '', qty: 1, unit: 'each', unit_price: 0 });
+                    setDraft({ description: '', qty: 1, unit: 'each', unit_price: 0, margin_pct: null as number | null });
                   }}
                   class="text-[11px] text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)]"
                 >
@@ -291,7 +362,7 @@ export default function LineItemsTable(props: Props) {
           </Show>
 
           <tr class="border-t-2 border-[color:var(--color-ink)] bg-[color:var(--color-surface-2)]">
-            <td colspan={props.editable ? 4 : 3} class="px-3.5 py-3 text-right font-medium">Total</td>
+            <td colspan={5} class="px-3.5 py-3 text-right font-medium">Total</td>
             <td class="px-3.5 py-3 text-right font-serif text-[18px] tabular-nums">
               {fmtCurrencyFull(total())}
             </td>

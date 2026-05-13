@@ -18,6 +18,8 @@ interface PatchBody {
   unit?: string | null;
   category?: string | null;
   confidence?: string | null;
+  /** null clears the override; a number sets it. */
+  margin_pct?: number | null;
 }
 
 export const PATCH: APIRoute = async ({ request, params, locals }) => {
@@ -48,6 +50,10 @@ export const PATCH: APIRoute = async ({ request, params, locals }) => {
     unit_price: body.unit_price != null ? Number(body.unit_price) : Number(line.unit_price),
     category: body.category !== undefined ? body.category : line.category,
     confidence: body.confidence !== undefined ? body.confidence : line.confidence,
+    margin_pct:
+      body.margin_pct !== undefined
+        ? body.margin_pct
+        : line.margin_pct,
   };
   const subtotal = round2(next.qty * next.unit_price);
 
@@ -95,12 +101,26 @@ async function loadLine(svc: any, id: string, shopId: string) {
   return { line, quote: line.quotes };
 }
 
+/** Re-sum the quote total applying each line's margin_pct override
+ * or the quote-level margin_pct as fallback. Mirrors the recompute in
+ * /api/quote/line-item.ts. */
 async function recomputeTotal(svc: any, quoteId: string) {
+  const { data: quote } = await svc
+    .from('quotes')
+    .select('margin_pct')
+    .eq('id', quoteId)
+    .maybeSingle();
+  const quoteMargin = Number(quote?.margin_pct ?? 0);
   const { data: lis } = await svc
     .from('quote_line_items')
-    .select('subtotal')
+    .select('subtotal, margin_pct')
     .eq('quote_id', quoteId);
-  const total = round2((lis ?? []).reduce((s: number, r: any) => s + Number(r.subtotal), 0));
+  const total = round2(
+    (lis ?? []).reduce((s: number, r: any) => {
+      const m = r.margin_pct != null ? Number(r.margin_pct) : quoteMargin;
+      return s + Number(r.subtotal) * (1 + m / 100);
+    }, 0),
+  );
   await svc.from('quotes').update({ total }).eq('id', quoteId);
 }
 
