@@ -60,11 +60,18 @@ CREATE INDEX IF NOT EXISTS proposal_shapes_embedding_idx
   WITH (lists = 50);
 
 ALTER TABLE proposal_shapes ENABLE ROW LEVEL SECURITY;
+
+-- DROP-then-CREATE makes the migration re-runnable. Postgres'
+-- CREATE POLICY / CREATE TRIGGER don't support IF NOT EXISTS, so
+-- without this a partial first run leaves the operator stuck on
+-- "policy already exists" on retry.
+DROP POLICY IF EXISTS proposal_shapes_tenant_all ON proposal_shapes;
 CREATE POLICY proposal_shapes_tenant_all ON proposal_shapes
   FOR ALL
   USING (shop_id IS NULL OR shop_id = current_shop_id())
   WITH CHECK (shop_id = current_shop_id());
 
+DROP TRIGGER IF EXISTS proposal_shapes_touch_updated_at ON proposal_shapes;
 CREATE TRIGGER proposal_shapes_touch_updated_at
   BEFORE UPDATE ON proposal_shapes
   FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
