@@ -1,5 +1,6 @@
 ---
 import Brief from '@/layouts/Brief.astro';
+import InsightsPanel from '@/components/dashboard/InsightsPanel';
 import Pill from '@/components/ui/Pill';
 import { client as supabaseService } from '@/lib/supabase';
 import { fmtCurrencyCompact } from '@/lib/quote-helpers';
@@ -51,6 +52,27 @@ const { data: outboundMessages } = await svc
   .eq('direction', 'outbound')
   .not('sent_at', 'is', null)
   .order('sent_at', { ascending: false });
+
+// Intelligence findings — top of the dashboard. Server-fetched so
+// the operator never sees an empty card flash; the InsightsPanel
+// island handles dismiss interactively.
+const { data: rawFindings } = await svc
+  .from('intelligence_findings')
+  .select('id, finding_type, headline, body, sample_size, projected_impact_usd, generated_at, expires_at')
+  .eq('shop_id', membership.shop_id)
+  .is('dismissed_at', null)
+  .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+  .order('generated_at', { ascending: false })
+  .limit(10);
+const findings = (rawFindings ?? []).map((r: any) => ({
+  id: r.id as string,
+  finding_type: r.finding_type as 'capacity_pricing' | 'winrate_by_size' | 'margin_trend' | 'exclusions_drift',
+  headline: r.headline as string,
+  body: r.body as string,
+  sample_size: Number(r.sample_size ?? 0),
+  projected_impact_usd: r.projected_impact_usd != null ? Number(r.projected_impact_usd) : null,
+  generated_at: r.generated_at as string,
+}));
 
 // ─── KPI computations ───────────────────────────────────────────
 const qs = quotes ?? [];
@@ -424,6 +446,9 @@ const ACTION_BUTTON: Record<ActionKind, { label: string; href: (id: string) => s
   <h1 class="font-serif text-[40px] font-medium leading-tight tracking-tight">
     Morning, <em>{ownerFirst}</em>.
   </h1>
+
+  <InsightsPanel client:load initialFindings={findings} />
+
 
   {coldStart && (
     <article class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 sm:p-14 mt-8 max-w-[760px]">

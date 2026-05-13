@@ -16,6 +16,7 @@
 import type { APIRoute } from 'astro';
 import { client as supabaseService } from '@/lib/supabase';
 import { captureOutcome } from '@/lib/winloss-agent';
+import { runIntelligencePass } from '@/lib/intelligence-agent';
 
 export const prerender = false;
 
@@ -85,6 +86,11 @@ export const POST: APIRoute = async ({ request, locals }) => {
   } catch (e) {
     console.warn('[mark-lost] winloss capture failed', e);
   }
+
+  // Intelligence pass: a fresh loss shifts win-rate/margin trends.
+  runIntelligencePass(env, svc, shopId).catch((e) => {
+    console.warn('[mark-lost] intelligence run failed', e);
+  });
 
   return json({ ok: true }, 200);
 };

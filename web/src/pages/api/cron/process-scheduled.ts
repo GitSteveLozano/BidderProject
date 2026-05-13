@@ -7,17 +7,24 @@
  * via Brevo/Twilio using the existing delivery lib. Flips draft→false
  * and stamps sent_at on success.
  *
+ * Also sweeps Intelligence — once per day at the first invocation
+ * after 03:00 UTC the worker runs runIntelligencePass for every
+ * shop that's had activity in the last 7 days, so capacity
+ * findings refresh and stale ones expire.
+ *
  * Triggered by an external cron (CF Cron Triggers on a sibling worker
  * or cron-job.org hitting this URL every minute). Authenticated via
  * shared CRON_SECRET in the `x-brief-cron-secret` header — no user
  * session needed.
  *
- * Returns a small JSON report: { processed, sent, failed, errors }.
+ * Returns a small JSON report: { processed, sent, failed, errors,
+ * intelligence }.
  */
 import type { APIRoute } from 'astro';
 
 import { client as supabaseService } from '@/lib/supabase';
 import { sendEmail, sendSms } from '@/lib/delivery';
+import { runIntelligencePass } from '@/lib/intelligence-agent';
 
 export const prerender = false;
 
@@ -136,7 +143,43 @@ export const POST: APIRoute = async ({ request, locals }) => {
     }
   }
 
-  return json(report, 200);
+  // ── Nightly intelligence sweep ──────────────────────────────────
+  // Only fires once per day. We use the existing intelligence_findings
+  // table's max(generated_at) as the daily marker: if any finding was
+  // produced in the last 20 hours, we skip. Cheap to evaluate; avoids
+  // a separate cron_state table for v1.
+  const intelligence = { ran: false, shops: 0, written: 0, skipped: 0 };
+  const hourUtc = new Date().getUTCHours();
+  if (hourUtc >= 3 && hourUtc < 5 && env.AI) {
+    const twentyHoursAgo = new Date(Date.now() - 20 * 3600 * 1000).toISOString();
+    const { count: recentFindings } = await svc
+      .from('intelligence_findings')
+      .select('*', { count: 'exact', head: true })
+      .gte('generated_at', twentyHoursAgo);
+    if ((recentFindings ?? 0) === 0) {
+      const sinceActive = new Date(Date.now() - 7 * 86400 * 1000).toISOString();
+      const { data: activeShops } = await svc
+        .from('quotes')
+        .select('shop_id, updated_at')
+        .gte('updated_at', sinceActive);
+      const shopIds = Array.from(
+        new Set((activeShops ?? []).map((r) => r.shop_id as string)),
+      );
+      intelligence.shops = shopIds.length;
+      for (const sid of shopIds) {
+        try {
+          const r = await runIntelligencePass(env, svc, sid);
+          intelligence.written += r.written;
+          intelligence.skipped += r.skipped;
+        } catch (e) {
+          report.errors.push(`intel/${sid}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      intelligence.ran = true;
+    }
+  }
+
+  return json({ ...report, intelligence }, 200);
 };
 
 function json(payload: unknown, status: number): Response {
