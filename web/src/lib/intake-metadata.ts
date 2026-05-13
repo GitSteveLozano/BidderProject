@@ -85,8 +85,28 @@ export async function extractIntakeMetadata(
   env: CloudflareEnv,
   rawText: string,
 ): Promise<IntakeMetadata> {
-  if (!env.AI || !rawText || rawText.trim().length < 50) return { ...EMPTY };
+  if (!rawText || rawText.trim().length < 50) return { ...EMPTY };
   const text = rawText.slice(0, 8000);
+
+  const fromAi = env.AI ? await aiExtract(env, text) : { ...EMPTY };
+  const fromRegex = regexExtract(text);
+
+  // Regex catches labeled fields (Bill To: …, Project Name: …) that
+  // Llama in JSON mode sometimes returns null for. We prefer the AI
+  // result whenever it has one — it's better at disambiguating
+  // contractor letterhead from the actual client — and only fall back
+  // to regex for nulls.
+  return {
+    client_name: fromAi.client_name ?? fromRegex.client_name ?? null,
+    contact_name: fromAi.contact_name ?? fromRegex.contact_name ?? null,
+    contact_email: fromAi.contact_email ?? fromRegex.contact_email ?? null,
+    contact_phone: fromAi.contact_phone ?? fromRegex.contact_phone ?? null,
+    project_title: fromAi.project_title ?? fromRegex.project_title ?? null,
+    project_address: fromAi.project_address ?? fromRegex.project_address ?? null,
+  };
+}
+
+async function aiExtract(env: CloudflareEnv, text: string): Promise<IntakeMetadata> {
   try {
     const response = await generateText(env, {
       max_tokens: 400,
@@ -114,6 +134,62 @@ export async function extractIntakeMetadata(
   } catch {
     return { ...EMPTY };
   }
+}
+
+// Deterministic label-based extraction. PDFs from unpdf often arrive
+// as one long line with no newlines, so the patterns terminate
+// captures at the next ALL-CAPS run (e.g. "PROJECT NAME 750 London st
+// QTY ITEM" — captures "750 London st", stops at "QTY"). Three+
+// consecutive uppercase letters means "next field label" in the
+// invoice/quote layouts these come from; postal codes like "R3T" mix
+// digits so they don't trigger.
+const ADDRESSEE_LABELS = '(?:Bill\\s+To|Sold\\s+To|Ship\\s+To|Attn(?:ention)?|Customer|Client|Prepared\\s+For|Quote\\s+Address)';
+const PROJECT_LABELS = '(?:Project\\s+Name|Job\\s+Name|Job\\s+Site|Project(?=\\s*:)|Job(?=\\s*:)|Re(?=\\s*:))';
+const PROJECT_BOILERPLATE = /^(scope|proposal|quote|estimate|bid|work|description)\b/i;
+
+function regexExtract(text: string): Partial<IntakeMetadata> {
+  const result: Partial<IntakeMetadata> = {};
+
+  const addrMatch = matchAfterLabel(text, ADDRESSEE_LABELS);
+  if (addrMatch) {
+    // Addressee block runs "name … street … city". Split at the first
+    // street-number token so we capture just the company / person.
+    // The street tail is the BILLING address — distinct from the
+    // job-site address, so we don't store it as project_address.
+    const streetIdx = addrMatch.search(/\b\d{1,5}\s+[A-Za-z]/);
+    const name = streetIdx > 0
+      ? addrMatch.slice(0, streetIdx).trim().replace(/[,;:.]+$/, '')
+      : addrMatch;
+    if (name.length >= 2 && name.length <= 100) result.client_name = name;
+  }
+
+  const projMatch = matchAfterLabel(text, PROJECT_LABELS);
+  if (projMatch && projMatch.length >= 2 && projMatch.length <= 120 && !PROJECT_BOILERPLATE.test(projMatch)) {
+    result.project_title = projMatch;
+    // If the project value reads like a street address ("750 London
+    // st"), it's both the title and the job-site address.
+    if (/^\d{1,5}\s+[A-Za-z]/.test(projMatch)) {
+      result.project_address = projMatch;
+    }
+  }
+
+  return result;
+}
+
+function matchAfterLabel(text: string, labelGroup: string): string | null {
+  // Two passes: locate the label case-insensitively, then capture the
+  // value case-sensitively. Single-pass with /i would make the
+  // [A-Z]{3,} terminator also match lowercase, cutting the value off
+  // at the first 3-letter word ("Trottier", "Bay") instead of the next
+  // real ALL-CAPS field label.
+  const labelRe = new RegExp(`\\b${labelGroup}\\b\\s*[:#\\-]?\\s+`, 'i');
+  const labelMatch = text.match(labelRe);
+  if (!labelMatch || labelMatch.index === undefined) return null;
+  const tail = text.slice(labelMatch.index + labelMatch[0].length);
+  const captureMatch = tail.match(/^(.+?)(?=\s+[A-Z]{3,}\b|[\n\r]|$)/);
+  if (!captureMatch) return null;
+  const v = captureMatch[1].trim().replace(/[,;:.]+$/, '');
+  return v.length >= 2 ? v : null;
 }
 
 function clean(v: unknown): string | null {
