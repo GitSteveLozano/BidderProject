@@ -15,6 +15,10 @@ export interface Phase {
   name: string;
   deliverables: string[];
   duration?: string | null;
+  /** Fee for this phase. Populated in the Pricing step; null while
+   * still scoping. Summed across phases when proposal_style is
+   * consulting/partnership and there are no line items. */
+  fee?: number | null;
 }
 
 interface Props {

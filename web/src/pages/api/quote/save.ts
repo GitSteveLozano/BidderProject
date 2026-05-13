@@ -35,7 +35,14 @@ interface SaveBody {
   proposal_style?: 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown' | null;
   program_type?: 'one_off' | 'recurring' | 'rebate' | null;
   term_months?: number | null;
-  phases?: Array<{ name: string; deliverables: string[]; duration?: string | null }> | null;
+  phases?: Array<{ name: string; deliverables: string[]; duration?: string | null; fee?: number | null }> | null;
+  rfi_response?: {
+    requirements_answered?: Array<{ requirement: string; response: string }>;
+    questions_answered?: Array<{ question: string; answer: string }>;
+    narrative_sections?: Array<{ heading: string; body: string }>;
+    cover_letter?: string;
+    submission_format?: string;
+  } | null;
   line_items: Array<{
     position?: number;
     description: string;
@@ -143,6 +150,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
     program_type: body.program_type ?? null,
     term_months: body.term_months ?? null,
     phases: body.phases && body.phases.length > 0 ? body.phases : null,
+    rfi_response: body.rfi_response ?? null,
   };
 
   let quoteId: string;

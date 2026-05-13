@@ -21,6 +21,7 @@ const VALID_KINDS: DraftKind[] = [
   'terms',
   'closing',
   'full_proposal',
+  'rfi_section',
 ];
 
 export const POST: APIRoute = async ({ request, locals }) => {

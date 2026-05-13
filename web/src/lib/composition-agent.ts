@@ -31,7 +31,8 @@ export type DraftKind =
   | 'exclusions'
   | 'terms'
   | 'closing'
-  | 'full_proposal';
+  | 'full_proposal'
+  | 'rfi_section';
 
 export interface CompositionInputs {
   shop_id: string;
@@ -81,6 +82,14 @@ in the voice profile if one is set.`,
 Sections: opening paragraph, scope narrative, exclusions, terms, closing.
 Markdown formatting. Match the shop's voice throughout. Do not invent
 line items — refer to the table the operator attached.`,
+
+  rfi_section: `You write ONE narrative section of an RFI response (the
+operator is responding to a buyer's request — not authoring an outbound
+bid). The caller provides the section heading + the operator's rough
+notes/intent in the scope_summary field. Write 1-3 short paragraphs in
+the shop's voice. Concrete, professional, evidence-based. Avoid
+boilerplate ("we are pleased to submit..."). State the shop's actual
+approach + relevant experience.`,
 };
 
 /**
@@ -172,6 +181,8 @@ function chunkTypesFor(kind: DraftKind): Array<
       return ['voice_sample'];
     case 'full_proposal':
       return ['voice_sample', 'scope_pattern', 'exclusion', 'service_definition', 'past_quote_summary'];
+    case 'rfi_section':
+      return ['voice_sample', 'service_definition', 'past_quote_summary'];
   }
 }
 

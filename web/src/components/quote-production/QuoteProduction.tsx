@@ -17,7 +17,9 @@ import Pill from '@/components/ui/Pill';
 import OfferPanel from '@/components/quote-production/OfferPanel';
 import CoverNotePanel from '@/components/quote-production/CoverNotePanel';
 import PhasesEditor, { type Phase } from '@/components/quote-production/PhasesEditor';
+import PhasePricingEditor from '@/components/quote-production/PhasePricingEditor';
 import RfiNotice from '@/components/quote-production/RfiNotice';
+import RfiResponseEditor, { type RfiResponseShape } from '@/components/quote-production/RfiResponseEditor';
 
 interface ShopContext {
   legal_name: string;
@@ -88,10 +90,17 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   const [proposalConfidence, setProposalConfidence] = createSignal(1);
   const [programType, setProgramType] = createSignal<'one_off' | 'recurring' | 'rebate' | null>(null);
   const [termMonths, setTermMonths] = createSignal<number | null>(null);
-  const [phases, setPhases] = createSignal<Array<{ name: string; deliverables: string[]; duration?: string | null }>>([]);
+  const [phases, setPhases] = createSignal<Phase[]>([]);
   const [rebateTerms, setRebateTerms] = createSignal<Array<{ product: string; rebate: string; basis: string }>>([]);
   const [rfiRequirements, setRfiRequirements] = createSignal<string[]>([]);
   const [rfiQuestions, setRfiQuestions] = createSignal<string[]>([]);
+  const [rfiResponse, setRfiResponse] = createSignal<RfiResponseShape>({
+    requirements_answered: [],
+    questions_answered: [],
+    narrative_sections: [],
+    cover_letter: '',
+    submission_format: '',
+  });
 
   // Pricing
   const [markupPct, setMarkupPct] = createSignal<number>(props.shop.default_markup_pct ?? 32);
@@ -106,17 +115,35 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
 
   // Derived totals — per-line margin overrides the global. A null
   // margin_pct on a line falls back to the quote-level markupPct.
-  const baseSubtotal = createMemo(() =>
-    lineItems().reduce((s, li) => s + li.subtotal, 0),
-  );
-  const total = createMemo(() =>
+  // Narrative pricing: when there are zero line items but phases with
+  // fees, total = sum of phase fees. baseSubtotal mirrors total in
+  // that case (no margin math — phase fees are fixed-price).
+  const isNarrativeStyle = () =>
+    proposalStyle() === 'consulting' || proposalStyle() === 'partnership';
+  const phasesTotal = createMemo(() =>
     round(
-      lineItems().reduce((s, li) => {
-        const m = li.margin_pct != null ? li.margin_pct : markupPct();
-        return s + li.subtotal * (1 + m / 100);
-      }, 0),
+      phases().reduce((s, ph) => s + (Number(ph.fee) || 0), 0),
       2,
     ),
+  );
+  const useNarrativePricing = createMemo(
+    () => lineItems().length === 0 && phases().length > 0 && isNarrativeStyle(),
+  );
+  const baseSubtotal = createMemo(() =>
+    useNarrativePricing()
+      ? phasesTotal()
+      : lineItems().reduce((s, li) => s + li.subtotal, 0),
+  );
+  const total = createMemo(() =>
+    useNarrativePricing()
+      ? phasesTotal()
+      : round(
+          lineItems().reduce((s, li) => {
+            const m = li.margin_pct != null ? li.margin_pct : markupPct();
+            return s + li.subtotal * (1 + m / 100);
+          }, 0),
+          2,
+        ),
   );
   const marginAmount = createMemo(() => round(total() - baseSubtotal(), 2));
 
@@ -136,6 +163,13 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
     setRebateTerms([]);
     setRfiRequirements([]);
     setRfiQuestions([]);
+    setRfiResponse({
+      requirements_answered: [],
+      questions_answered: [],
+      narrative_sections: [],
+      cover_letter: '',
+      submission_format: '',
+    });
     try {
       const resp = await fetch('/api/quote/scan', {
         method: 'POST',
@@ -181,6 +215,19 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
       setScanError(err instanceof Error ? err.message : String(err));
     } finally {
       setScanning(false);
+      // After the scan settles, if the classifier says this is an
+      // inbound RFI, seed the response shells from the buyer's
+      // detected requirements + questions. Operator-edited values are
+      // preserved on re-scan because we only seed when shells are empty.
+      if (proposalStyle() === 'rfi_received' && rfiResponse().requirements_answered.length === 0) {
+        setRfiResponse({
+          requirements_answered: rfiRequirements().map((r) => ({ requirement: r, response: '' })),
+          questions_answered: rfiQuestions().map((q) => ({ question: q, answer: '' })),
+          narrative_sections: [],
+          cover_letter: '',
+          submission_format: '',
+        });
+      }
     }
   };
 
@@ -286,6 +333,7 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           program_type: programType(),
           term_months: termMonths(),
           phases: phases().length > 0 ? phases() : null,
+          rfi_response: proposalStyle() === 'rfi_received' ? rfiResponse() : null,
         }),
       });
       if (!saveResp.ok) throw new Error(`Save failed: ${await saveResp.text()}`);
@@ -359,21 +407,42 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
       </Show>
 
       <Show when={stepId() === 'pricing'}>
-        <PricingStep
-          shop={props.shop}
-          lineItems={lineItems}
-          scopeSummary={scopeSummary}
-          markupPct={markupPct}
-          setMarkupPct={setMarkupPct}
-          baseSubtotal={baseSubtotal}
-          marginAmount={marginAmount}
-          total={total}
-          updateLineItem={updateLineItem}
-          removeLineItem={removeLineItem}
-          addLineItem={addLineItem}
-          onBack={() => setStepIdx(1)}
-          onContinue={goToReview}
-        />
+        <Show
+          when={proposalStyle() === 'rfi_received'}
+          fallback={
+            <PricingStep
+              shop={props.shop}
+              lineItems={lineItems}
+              scopeSummary={scopeSummary}
+              markupPct={markupPct}
+              setMarkupPct={setMarkupPct}
+              baseSubtotal={baseSubtotal}
+              marginAmount={marginAmount}
+              total={total}
+              updateLineItem={updateLineItem}
+              removeLineItem={removeLineItem}
+              addLineItem={addLineItem}
+              proposalStyle={proposalStyle}
+              phases={phases}
+              setPhases={setPhases}
+              narrativePricing={useNarrativePricing}
+              onBack={() => setStepIdx(1)}
+              onContinue={goToReview}
+            />
+          }
+        >
+          <RfiStep
+            requirements={rfiRequirements}
+            questions={rfiQuestions}
+            response={rfiResponse}
+            setResponse={setRfiResponse}
+            scopeSummary={scopeSummary}
+            clientName={clientName}
+            projectTitle={projectTitle}
+            onBack={() => setStepIdx(1)}
+            onContinue={goToReview}
+          />
+        </Show>
       </Show>
 
       <Show when={stepId() === 'review'}>
@@ -1166,18 +1235,31 @@ function PricingStep(p: {
   updateLineItem: (idx: number, patch: Partial<LineItem>) => void;
   removeLineItem: (idx: number) => void;
   addLineItem: () => void;
+  proposalStyle: () => 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown';
+  phases: () => Phase[];
+  setPhases: (p: Phase[]) => void;
+  narrativePricing: () => boolean;
   onBack: () => void;
   onContinue: () => void;
 }) {
+  const updatePhase = (idx: number, patch: Partial<Phase>) => {
+    const next = p.phases().slice();
+    next[idx] = { ...next[idx], ...patch };
+    p.setPhases(next);
+  };
+
   return (
     <div>
       <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
         Step 3 · Pricing
       </div>
       <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">
-        Confirm the numbers.
+        {p.narrativePricing() ? 'Price each phase.' : 'Confirm the numbers.'}
       </h1>
 
+      <Show
+        when={p.narrativePricing()}
+        fallback={
       <div class="mt-6 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
         <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] overflow-x-auto">
           <div class="grid grid-cols-[3fr_60px_70px_90px_70px_100px_36px] min-w-[720px] px-4 py-3 border-b border-[color:var(--color-line)] text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">
@@ -1310,10 +1392,116 @@ function PricingStep(p: {
         />
         </div>
       </div>
+        }
+      >
+        <div class="mt-6">
+          <PhasePricingEditor
+            phases={p.phases}
+            onUpdate={updatePhase}
+            total={p.total}
+          />
+          <p class="mt-3 text-[12.5px] font-serif italic text-[color:var(--color-muted)] leading-relaxed">
+            Phase fees are fixed-price — no margin slider. Add or rename
+            phases on the Scope step.
+          </p>
+        </div>
+      </Show>
 
       <div class="mt-6 flex items-center justify-between">
         <Button variant="ghost" onClick={p.onBack}>← Back</Button>
-        <Button variant="accent" disabled={p.lineItems().length === 0} onClick={p.onContinue}>
+        <Button
+          variant="accent"
+          disabled={
+            p.narrativePricing()
+              ? p.phases().length === 0 || p.total() <= 0
+              : p.lineItems().length === 0
+          }
+          onClick={p.onContinue}
+        >
+          Continue to review →
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function RfiStep(p: {
+  requirements: () => string[];
+  questions: () => string[];
+  response: () => RfiResponseShape;
+  setResponse: (next: RfiResponseShape) => void;
+  scopeSummary: () => string;
+  clientName: () => string;
+  projectTitle: () => string;
+  onBack: () => void;
+  onContinue: () => void;
+}) {
+  // Asks Composition for a voice-matched body for one narrative
+  // section. Inline mode — no quote_id needed, runs against Context.
+  const draftSection = async (heading: string, prompt: string): Promise<string> => {
+    const r = await fetch('/api/composition/draft', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'rfi_section',
+        scope_summary:
+          (p.scopeSummary() || '') +
+          (heading ? `\nSection: ${heading}` : '') +
+          (prompt ? `\nOperator notes: ${prompt}` : ''),
+        client_name: p.clientName(),
+        project_title: p.projectTitle(),
+        classification: 'rfi_received',
+      }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const json = (await r.json()) as { text?: string };
+    return json.text ?? '';
+  };
+
+  const answeredCount = () =>
+    p.response().requirements_answered.filter((r) => r.response.trim()).length +
+    p.response().questions_answered.filter((q) => q.answer.trim()).length +
+    (p.response().cover_letter.trim() ? 1 : 0);
+  const totalToAnswer = () =>
+    p.response().requirements_answered.length +
+    p.response().questions_answered.length +
+    1;
+  const ready = () => answeredCount() >= Math.max(2, Math.ceil(totalToAnswer() / 2));
+
+  return (
+    <div>
+      <div class="flex items-start gap-6">
+        <div class="flex-1 min-w-0">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+            Step 3 · Response
+          </div>
+          <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">
+            Answer the buyer.
+          </h1>
+        </div>
+        <div class="text-right">
+          <div class="font-serif text-[28px] tabular-nums leading-none">
+            {answeredCount()}<span class="text-[14px] text-[color:var(--color-muted)]">/{totalToAnswer()}</span>
+          </div>
+          <div class="text-[11px] font-mono uppercase text-[color:var(--color-muted-2)] mt-0.5">
+            sections drafted
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-6">
+        <RfiResponseEditor
+          requirements={p.requirements}
+          questions={p.questions}
+          response={p.response}
+          setResponse={p.setResponse}
+          draftSection={draftSection}
+        />
+      </div>
+
+      <div class="mt-6 flex items-center justify-between">
+        <Button variant="ghost" onClick={p.onBack}>← Back</Button>
+        <Button variant="accent" disabled={!ready()} onClick={p.onContinue}>
           Continue to review →
         </Button>
       </div>
