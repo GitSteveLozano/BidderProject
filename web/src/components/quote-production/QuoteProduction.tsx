@@ -337,8 +337,11 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           lineItems={lineItems}
           clientName={clientName}
           clientContact={clientContact}
+          setClientContact={setClientContact}
           clientContactEmail={clientContactEmail}
+          setClientContactEmail={setClientContactEmail}
           clientContactPhone={clientContactPhone}
+          setClientContactPhone={setClientContactPhone}
           projectTitle={projectTitle}
           projectAddress={projectAddress}
           shop={props.shop}
@@ -1164,8 +1167,11 @@ function ReviewStep(p: {
   lineItems: () => LineItem[];
   clientName: () => string;
   clientContact: () => string;
+  setClientContact: (v: string) => void;
   clientContactEmail: () => string;
+  setClientContactEmail: (v: string) => void;
   clientContactPhone: () => string;
+  setClientContactPhone: (v: string) => void;
   projectTitle: () => string;
   projectAddress: () => string;
   shop: ShopContext;
@@ -1267,23 +1273,32 @@ function ReviewStep(p: {
                     No email on file.
                   </p>
                   <p class="mt-1.5 text-[12.5px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
-                    Brief will save this quote as sent but won't deliver. Add a
-                    contact email on the Intake step, or send the PDF manually
-                    after saving.
+                    Add one here and Brief will deliver the quote. Leave blank
+                    to save without sending.
                   </p>
-                  <a
-                    href="#intake"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      p.onBack();
-                      // Back to pricing, operator clicks back again to Intake.
-                      // We don't have a "jump to intake" in the wizard yet —
-                      // the Back button is the path.
-                    }}
-                    class="mt-2 inline-block text-[12px] underline text-[color:var(--color-warn)] hover:brightness-90"
-                  >
-                    ← Back to fix that
-                  </a>
+                  <div class="mt-3 space-y-2">
+                    <Field label="Contact email">
+                      <Input
+                        type="email"
+                        value={p.clientContactEmail()}
+                        onInput={(e) => p.setClientContactEmail(e.currentTarget.value)}
+                        placeholder="diane@halsted.com"
+                      />
+                    </Field>
+                    <Field label="Contact name (optional)">
+                      <Input
+                        value={p.clientContact()}
+                        onInput={(e) => p.setClientContact(e.currentTarget.value)}
+                      />
+                    </Field>
+                    <Field label="SMS phone (optional)">
+                      <Input
+                        value={p.clientContactPhone()}
+                        onInput={(e) => p.setClientContactPhone(e.currentTarget.value)}
+                        placeholder="+1…"
+                      />
+                    </Field>
+                  </div>
                 </div>
               }
             >
