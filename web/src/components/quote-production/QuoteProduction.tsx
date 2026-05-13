@@ -1315,7 +1315,14 @@ function ScopeStep(p: {
           their thresholds. Stays visible until 100% AND we have
           line items; then collapses to make room. */}
       <Show when={!p.error() && (p.progress() < 100 || p.lineItems().length === 0)}>
-        <ScanTaskList progress={p.progress} lineItemCount={() => p.lineItems().length} />
+        <ScanTaskList
+          progress={p.progress}
+          proposalStyle={p.proposalStyle}
+          phaseCount={() => p.phases().length}
+          rebateCount={() => p.rebateTerms().length}
+          requirementCount={() => p.rfiRequirements().length}
+          lineItemCount={() => p.lineItems().length}
+        />
       </Show>
 
       <Show when={!p.scanning() && p.proposalStyle() === 'rfi_received'}>
@@ -2495,38 +2502,111 @@ function round(n: number, decimals: number): number {
 
 /**
  * <ScanTaskList> — narrative of what Brief is doing while the SSE
- * stream fills the line items. Tasks advance based on `progress`
- * thresholds (which the scan endpoint emits in
- * `{type:"progress",percent}` events). Active task gets a spinner +
- * "reading..." right-aligned; completed tasks get a green checkmark;
- * future tasks render at 40% opacity.
+ * stream parses the doc. Tasks advance based on `progress` thresholds
+ * (which the scan endpoint emits as `{type:"progress",percent}`).
  *
- * Mirrors design/mockups/01-agenda-default.png. The thresholds
- * intentionally finish a beat before 100% so by the time progress
- * hits 100 every task is checked and the list can transition cleanly
- * to the line items panel.
+ * Task labels adapt to the doc type once the classifier fires its
+ * `proposal_style` event (usually around 50% progress). Before that
+ * we show generic copy so contractor-coded labels don't appear on
+ * non-construction docs.
+ *
+ * The active task gets a spinner + italic "reading..."; completed
+ * tasks get a green check; future tasks fade to 40% opacity.
  */
-function ScanTaskList(p: {
-  progress: () => number;
-  lineItemCount: () => number;
-}) {
-  const tasks = [
-    { at: 0,  label: 'Reading the scope text' },
+type ScanStyle = 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown';
+
+interface ScanTask {
+  at: number;
+  label: string;
+  /** Optional counter key — when this task lands, surface "X so far"
+   * on the right. Maps to one of the count props. */
+  counter?: 'line_item' | 'phase' | 'rebate' | 'requirement';
+}
+
+const SCAN_TASKS: Record<ScanStyle, ScanTask[]> = {
+  project_quote: [
+    { at: 0,  label: 'Reading the scope' },
     { at: 18, label: 'Identifying project type' },
     { at: 38, label: 'Pulling matching past jobs' },
     { at: 58, label: 'Estimating quantities' },
-    { at: 78, label: 'Composing line items + crew estimate' },
+    { at: 78, label: 'Composing line items + crew estimate', counter: 'line_item' },
     { at: 92, label: 'Cross-checking against your typical margins' },
-  ];
+  ],
+  partnership: [
+    { at: 0,  label: 'Reading the proposal' },
+    { at: 18, label: 'Recognizing this as a partnership pitch' },
+    { at: 38, label: 'Pulling rebate terms + program structure' },
+    { at: 58, label: 'Outlining the transition plan' },
+    { at: 78, label: 'Composing the program summary', counter: 'rebate' },
+    { at: 92, label: 'Cross-checking against past partnerships' },
+  ],
+  consulting: [
+    { at: 0,  label: 'Reading the proposal' },
+    { at: 18, label: 'Recognizing this as a consulting engagement' },
+    { at: 38, label: 'Pulling matching past engagements' },
+    { at: 58, label: 'Outlining phases + deliverables' },
+    { at: 78, label: 'Composing the phase plan', counter: 'phase' },
+    { at: 92, label: 'Cross-checking against your typical fee structure' },
+  ],
+  rfi_received: [
+    { at: 0,  label: 'Reading the request' },
+    { at: 18, label: 'Recognizing this as an inbound RFI' },
+    { at: 38, label: 'Extracting requirements + vendor questions' },
+    { at: 58, label: 'Noting submission format + deadline' },
+    { at: 78, label: 'Drafting response section placeholders', counter: 'requirement' },
+    { at: 92, label: 'Cross-checking against your past responses' },
+  ],
+  unknown: [
+    { at: 0,  label: 'Reading the document' },
+    { at: 18, label: 'Classifying the proposal type' },
+    { at: 38, label: 'Pulling related past work' },
+    { at: 58, label: 'Extracting the key structure' },
+    { at: 78, label: 'Composing the editable draft' },
+    { at: 92, label: 'Cross-checking against your defaults' },
+  ],
+};
+
+function ScanTaskList(p: {
+  progress: () => number;
+  proposalStyle: () => ScanStyle;
+  lineItemCount: () => number;
+  phaseCount: () => number;
+  rebateCount: () => number;
+  requirementCount: () => number;
+}) {
+  // Lock the task set the first time we know the style. Switching
+  // mid-scan would re-animate the completed tasks, which looks janky.
+  const [locked, setLocked] = createSignal<ScanStyle | null>(null);
+  const activeStyle = (): ScanStyle => {
+    const s = p.proposalStyle();
+    if (locked()) return locked()!;
+    if (s !== 'unknown') {
+      setLocked(s);
+      return s;
+    }
+    // Until the classifier fires, use the generic ('unknown') copy.
+    return 'unknown';
+  };
+  const tasks = () => SCAN_TASKS[activeStyle()];
+
+  const counterFor = (key: ScanTask['counter']): number | null => {
+    if (key === 'line_item') return p.lineItemCount();
+    if (key === 'phase') return p.phaseCount();
+    if (key === 'rebate') return p.rebateCount();
+    if (key === 'requirement') return p.requirementCount();
+    return null;
+  };
+
   return (
     <div class="mt-6 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] px-5 py-4">
       <ul class="space-y-2.5">
-        <For each={tasks}>
+        <For each={tasks()}>
           {(t, i) => {
-            const next = tasks[i() + 1];
+            const next = tasks()[i() + 1];
             const done = () => p.progress() >= (next ? next.at : 100);
             const active = () => !done() && p.progress() >= t.at;
             const future = () => p.progress() < t.at;
+            const count = () => (done() && t.counter ? counterFor(t.counter) : null);
             return (
               <li
                 class={[
@@ -2553,9 +2633,9 @@ function ScanTaskList(p: {
                 <Show when={active()}>
                   <span class="text-[11px] font-mono italic text-[color:var(--color-muted-2)]">reading…</span>
                 </Show>
-                <Show when={done() && t.label === 'Composing line items + crew estimate' && p.lineItemCount() > 0}>
+                <Show when={count() != null && count()! > 0}>
                   <span class="text-[11px] font-mono tabular-nums text-[color:var(--color-muted)]">
-                    {p.lineItemCount()} so far
+                    {count()} so far
                   </span>
                 </Show>
               </li>
