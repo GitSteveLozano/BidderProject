@@ -1,735 +1,445 @@
 /**
- * <OnboardingFlow> — 7-step self-serve onboarding island.
+ * <OnboardingFlow> — 2-screen self-serve onboarding.
  *
- * Steps (post-Google-sign-in):
- *   1. Welcome
- *   2. Voice sample upload (text paste for now — file upload TODO)
- *   3. Scan (real Claude tool-use streaming via /api/voice/analyze)
- *   4. License
- *   5. Confirm profile
- *   6. Pricing defaults
- *   7. Calendar consent (already granted at sign-in if scopes were OK)
+ * Step 1 · Basics. Business name, owner, what to call it, optional
+ *   license. Everything else (pricing defaults, calendar, integrations,
+ *   voice profile, etc.) lives in Settings — operator can fill it in
+ *   later without blocking activation.
  *
- * On completion: PATCH /api/shops/me sets onboarding_completed_at; the
- * Astro page redirects to /dashboard.
+ * Step 2 · Sample. Drop one piece of past writing — a sample bid (PDF),
+ *   a website URL, pasted text, or a voice memo. Brief reads it to
+ *   learn how the operator writes. Skip-able; the analyzer runs
+ *   silently in the background (or not at all) so onboarding never
+ *   stalls on a network call.
+ *
+ * On finish: PATCH /api/shops/me to mark onboarding_completed_at and
+ * persist business basics, then redirect to /dashboard.
  */
-import { createSignal, For, Show, createMemo } from 'solid-js';
+import { createEffect, createSignal, For, Show } from 'solid-js';
 import Button from '@/components/ui/Button';
 import Field, { Input } from '@/components/ui/Field';
-import Stepper from '@/components/ui/Stepper';
 
 interface Props {
   shopId: string;
   ownerName: string;
   ownerEmail: string;
   ownerFirst: string;
-  calendarAlreadyConnected: boolean;
 }
 
-interface VoiceSignal {
-  kind: string;
-  value: string;
-  evidence?: string;
-}
-
-interface PublicMatch {
-  source: 'website' | 'cslb' | 'hi-dcca';
-  source_label: string;
-  legal_name?: string;
-  trade_name?: string;
-  license_number?: string;
-  license_classification?: string;
-  license_jurisdiction?: string;
-  address?: string;
-  phone?: string;
-  email?: string;
-  website?: string;
-  evidence_url: string;
-  evidence_excerpt?: string;
-}
-
-interface ProfileForm {
+interface Profile {
   legal_name: string;
   trade_name: string;
+  owner_name: string;
+  business_noun: string;
   license_number: string;
   license_jurisdiction: string;
   license_classification: string;
-  default_markup_pct: number;
-  default_labor_rate: number;
 }
 
-const STEPS = [
-  { id: 'welcome',  label: 'Welcome' },
-  { id: 'upload',   label: 'Upload' },
-  { id: 'scan',     label: 'Scan' },
-  { id: 'license',  label: 'License' },
-  { id: 'confirm',  label: 'Confirm' },
-  { id: 'defaults', label: 'Defaults' },
-  { id: 'calendar', label: 'Calendar' },
-];
+const NOUN_SUGGESTIONS = ['shop', 'agency', 'studio', 'firm', 'practice'];
 
 export default function OnboardingFlow(props: Props) {
-  const [stepIdx, setStepIdx] = createSignal(0);
-  const stepId = createMemo(() => STEPS[stepIdx()].id);
-  const completed = createMemo(() => STEPS.slice(0, stepIdx()).map((s) => s.id));
+  const [step, setStep] = createSignal<1 | 2>(1);
 
-  // Step 2: voice sample (paste-text MVP)
-  const [voiceText, setVoiceText] = createSignal('');
-  const [voiceSignals, setVoiceSignals] = createSignal<VoiceSignal[]>([]);
-  const [scanProgress, setScanProgress] = createSignal(0);
-  const [scanError, setScanError] = createSignal<string | null>(null);
-
-  // Step 4-6: profile
-  const [profile, setProfile] = createSignal<ProfileForm>({
+  const [profile, setProfile] = createSignal<Profile>({
     legal_name: props.ownerName,
     trade_name: '',
+    owner_name: props.ownerName,
+    business_noun: 'shop',
     license_number: '',
-    license_jurisdiction: 'CA',
+    license_jurisdiction: '',
     license_classification: '',
-    default_markup_pct: 32,
-    default_labor_rate: 92,
   });
-  const updateProfile = (patch: Partial<ProfileForm>) =>
-    setProfile({ ...profile(), ...patch });
+  const update = (patch: Partial<Profile>) => setProfile({ ...profile(), ...patch });
+  const [showLicense, setShowLicense] = createSignal(false);
 
-  // Step 7: calendar
-  const [calendarConnected, setCalendarConnected] = createSignal(props.calendarAlreadyConnected);
+  // Step 2 — sample drop. Accepts any one of: file, url, pasted text,
+  // recorded voice (deferred to MediaRecorder in the future; for v1
+  // text + file + URL are the three entry points).
+  const [sampleText, setSampleText] = createSignal('');
+  const [sampleUrl, setSampleUrl] = createSignal('');
+  const [pdfChip, setPdfChip] = createSignal<{ name: string; chars: number } | null>(null);
+  const [sampleBusy, setSampleBusy] = createSignal(false);
+  const [sampleError, setSampleError] = createSignal<string | null>(null);
 
   const [finishing, setFinishing] = createSignal(false);
+  const [finishError, setFinishError] = createSignal<string | null>(null);
 
-  // Step 1 sub-flow: public-record lookup
-  const [lookupOpen, setLookupOpen] = createSignal(false);
-  const [lookupBusinessName, setLookupBusinessName] = createSignal('');
-  const [lookupState, setLookupState] = createSignal('CA');
-  const [lookupWebsiteUrl, setLookupWebsiteUrl] = createSignal('');
-  const [lookupBusy, setLookupBusy] = createSignal(false);
-  const [lookupTriggered, setLookupTriggered] = createSignal(false);
-  const [lookupMatches, setLookupMatches] = createSignal<PublicMatch[]>([]);
-  const [lookupError, setLookupError] = createSignal<string | null>(null);
+  const canContinueStep1 = () =>
+    profile().legal_name.trim().length > 0 &&
+    profile().business_noun.trim().length > 0 &&
+    profile().owner_name.trim().length > 0;
 
-  const runLookup = async () => {
-    setLookupBusy(true);
-    setLookupError(null);
-    setLookupMatches([]);
-    setLookupTriggered(true);
+  const handlePdf = async (file: File) => {
+    setSampleBusy(true);
+    setSampleError(null);
     try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const resp = await fetch('/api/intake/extract-pdf', { method: 'POST', body: fd });
+      if (!resp.ok) throw new Error(await resp.text());
+      const data = (await resp.json()) as { text: string; empty_text: boolean; filename: string };
+      if (data.empty_text) {
+        setSampleError('That PDF has no selectable text — try another file, or paste/type your sample.');
+        return;
+      }
+      setSampleText(data.text);
+      setPdfChip({ name: data.filename, chars: data.text.length });
+    } catch (err) {
+      setSampleError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSampleBusy(false);
+    }
+  };
+
+  const fetchUrl = async () => {
+    const url = sampleUrl().trim();
+    if (!url) return;
+    setSampleBusy(true);
+    setSampleError(null);
+    try {
+      // Re-use the public-record-lookup endpoint to fetch the page and
+      // extract text content from the website. It already returns
+      // og-tag + JSON-LD context which is good signal.
       const resp = await fetch('/api/onboarding/public-lookup', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          business_name: lookupBusinessName().trim() || undefined,
-          state: lookupState().trim() || undefined,
-          website_url: lookupWebsiteUrl().trim() || undefined,
-        }),
+        body: JSON.stringify({ website_url: url }),
       });
       if (!resp.ok) throw new Error(await resp.text());
-      const data = (await resp.json()) as { matches: PublicMatch[] };
-      setLookupMatches(data.matches ?? []);
+      const data = (await resp.json()) as { matches?: Array<{ evidence_excerpt?: string; legal_name?: string }> };
+      const m = data.matches?.[0];
+      if (!m) {
+        setSampleError(`Couldn't read anything from ${url}. Paste a sample instead?`);
+        return;
+      }
+      // Compose a small "sample" from what we extracted. Better than
+      // nothing for voice signal — gives the analyzer some material.
+      const composed = [
+        m.legal_name ? `Company: ${m.legal_name}` : '',
+        m.evidence_excerpt ? `Description: ${m.evidence_excerpt}` : '',
+      ].filter(Boolean).join('\n\n');
+      if (composed.length < 50) {
+        setSampleError(`Found the page but only ${composed.length} chars of text. Drop a PDF or paste a sample.`);
+        return;
+      }
+      setSampleText(composed);
     } catch (err) {
-      setLookupError(err instanceof Error ? err.message : String(err));
+      setSampleError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLookupBusy(false);
+      setSampleBusy(false);
     }
   };
 
-  const acceptMatch = (m: PublicMatch) => {
-    updateProfile({
-      legal_name: m.legal_name ?? profile().legal_name,
-      trade_name: m.trade_name ?? profile().trade_name,
-      license_number: m.license_number ?? profile().license_number,
-      license_jurisdiction:
-        m.license_jurisdiction ?? lookupState() ?? profile().license_jurisdiction,
-      license_classification: m.license_classification ?? profile().license_classification,
-    });
-    setLookupOpen(false);
-    next();
-  };
-
-  const next = () => setStepIdx(Math.min(stepIdx() + 1, STEPS.length - 1));
-  const back = () => setStepIdx(Math.max(stepIdx() - 1, 0));
-
-  // Kick off the scan when we land on step 3
-  const startScan = async () => {
-    setScanProgress(0);
-    setScanError(null);
-    setVoiceSignals([]);
-    try {
-      const resp = await fetch('/api/voice/analyze', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: voiceText() }),
-      });
-      if (!resp.ok) {
-        throw new Error(`Server returned ${resp.status}: ${await resp.text()}`);
-      }
-      const reader = resp.body!.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const events = buf.split('\n\n');
-        buf = events.pop() ?? '';
-        for (const block of events) {
-          const dataLine = block.split('\n').find((l) => l.startsWith('data: '));
-          if (!dataLine) continue;
-          const payload = JSON.parse(dataLine.slice(6));
-          if (payload.type === 'progress') {
-            setScanProgress(payload.percent);
-          } else if (payload.type === 'signal') {
-            setVoiceSignals([...voiceSignals(), payload.payload]);
-          } else if (payload.type === 'done') {
-            setScanProgress(100);
-          } else if (payload.type === 'error') {
-            setScanError(payload.message);
-          }
-        }
-      }
-    } catch (err) {
-      setScanError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const goToScan = async () => {
-    next();
-    await startScan();
-  };
-
-  const finish = async () => {
+  const finish = async (opts: { withSample: boolean }) => {
     setFinishing(true);
+    setFinishError(null);
     try {
+      const patch: Record<string, unknown> = {
+        ...profile(),
+        // Trim license fields if all empty so we don't write meaningless rows.
+        license_number: profile().license_number.trim() || null,
+        license_jurisdiction: profile().license_jurisdiction.trim() || null,
+        license_classification: profile().license_classification.trim() || null,
+        trade_name: profile().trade_name.trim() || null,
+        business_noun: profile().business_noun.trim().toLowerCase() || 'shop',
+        onboarding_completed_at: new Date().toISOString(),
+      };
       const resp = await fetch('/api/shops/me', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          ...profile(),
-          google_calendar_connected: calendarConnected(),
-          onboarding_completed_at: new Date().toISOString(),
-        }),
+        body: JSON.stringify(patch),
       });
       if (!resp.ok) throw new Error(await resp.text());
+
+      // Kick off the voice analyzer in the background if we have a
+      // sample. Don't await — onboarding redirects immediately;
+      // signal lands on shop.voice_profile when the analyzer finishes.
+      if (opts.withSample && sampleText().trim().length >= 50) {
+        void fetch('/api/voice/analyze', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ content: sampleText() }),
+        }).catch((err) => {
+          // eslint-disable-next-line no-console
+          console.warn('[onboarding] background analyze failed', err);
+        });
+      }
+
       window.location.href = '/dashboard';
     } catch (err) {
-      console.error('[onboarding] finish failed', err);
-      alert('Could not save profile: ' + (err instanceof Error ? err.message : String(err)));
+      setFinishError(err instanceof Error ? err.message : String(err));
     } finally {
       setFinishing(false);
     }
   };
 
   return (
-    <div class="max-w-[740px] mx-auto py-4">
-      <div class="flex items-center justify-between mb-10">
-        <div>
-          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-            Setting up Brief
-          </div>
-          <h1 class="font-serif text-[40px] font-medium leading-tight mt-1">
-            {stepIdx() === STEPS.length - 1 ? "You're ready." : 'Welcome.'}
-          </h1>
+    <div class="max-w-[680px] mx-auto py-10 px-4">
+      <div class="flex items-baseline gap-3 mb-8">
+        <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+          Setting up Brief
         </div>
-        <Stepper steps={STEPS} current={stepId()} completed={completed()} />
+        <span class="flex-1" />
+        <div class="font-mono text-xs text-[color:var(--color-muted)]">
+          Step {step()} of 2
+        </div>
       </div>
 
-      <Show when={stepId() === 'welcome'}>
-        {/* Editorial welcome card — matches design/mockups/07-calendar.png style. */}
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
-          <Show
-            when={!lookupOpen()}
-            fallback={
-              <PublicLookupPanel
-                businessName={lookupBusinessName}
-                setBusinessName={setLookupBusinessName}
-                state={lookupState}
-                setState={setLookupState}
-                websiteUrl={lookupWebsiteUrl}
-                setWebsiteUrl={setLookupWebsiteUrl}
-                busy={lookupBusy}
-                triggered={lookupTriggered}
-                matches={lookupMatches}
-                error={lookupError}
-                ownerName={props.ownerName}
-                onRun={runLookup}
-                onAccept={acceptMatch}
-                onCancel={() => {
-                  setLookupOpen(false);
-                  setLookupTriggered(false);
-                  setLookupMatches([]);
-                  setLookupError(null);
-                }}
-                onSkip={next}
-              />
-            }
-          >
-            <h2 class="font-serif text-[26px] font-medium leading-tight">
-              Want to save a few minutes?
-            </h2>
-            <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
-              If your business has a <em>public</em> record — a contractor license, a state registry, a professional board listing — Brief can read it and pre-fill your profile. Most businesses don't have one, and that's fine. You can fill the profile out yourself in about a minute.
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                setLookupBusinessName(profile().trade_name || profile().legal_name || props.ownerName);
-                setLookupOpen(true);
-              }}
-              class="mt-6 w-full text-left rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] hover:bg-[color:var(--color-surface)] hover:border-[color:var(--color-line-strong)] px-5 py-4 transition-colors flex items-center gap-4"
-            >
-              <div class="w-9 h-9 rounded-md bg-[color:var(--color-accent-tint)] text-[color:var(--color-accent)] grid place-items-center shrink-0">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
-                  <circle cx="7" cy="7" r="4.5" />
-                  <path d="M10.3 10.3l3.2 3.2" stroke-linecap="round" />
-                </svg>
-              </div>
-              <div class="flex-1 min-w-0">
-                <div class="font-medium text-[14px]">Look up a public record</div>
-                <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
-                  Contractor license, state business registry, or your shop's website. We'll show you what we found before saving anything.
-                </div>
-              </div>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="text-[color:var(--color-muted)]" aria-hidden="true"><path d="M5 3l4 4-4 4" /></svg>
-            </button>
-            <button
-              type="button"
-              onClick={next}
-              class="mt-3 w-full text-left rounded-lg border border-[color:var(--color-line-2)] hover:bg-[color:var(--color-surface-2)] hover:border-[color:var(--color-line-strong)] px-5 py-4 transition-colors flex items-center gap-4"
-            >
-              <div class="w-9 h-9 rounded-md bg-[color:var(--color-bg-2)] text-[color:var(--color-muted)] grid place-items-center shrink-0">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M3 2.5h6l3.5 3.5v7.5a0.5 0.5 0 0 1 -0.5 0.5h-9a0.5 0.5 0 0 1 -0.5 -0.5v-11a0.5 0.5 0 0 1 0.5 -0.5z" />
-                  <path d="M9 2.5v3.5h3.5" />
-                </svg>
-              </div>
-              <div class="flex-1 min-w-0">
-                <div class="font-medium text-[14px]">Skip and fill it in yourself</div>
-                <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
-                  Takes about a minute. Six steps total — none of them graded.
-                </div>
-              </div>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="text-[color:var(--color-muted)]" aria-hidden="true"><path d="M5 3l4 4-4 4" /></svg>
-            </button>
-          </Show>
-        </div>
-      </Show>
+      <Show when={step() === 1}>
+        <h1 class="font-serif text-[40px] font-medium leading-tight">
+          Welcome, <em>{props.ownerFirst}</em>.
+        </h1>
+        <p class="mt-3 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
+          Two quick questions and you're in. Brief works without any of this
+          (you can edit everything from Settings later), but it sharpens up
+          fast once it knows the basics.
+        </p>
 
-      <Show when={stepId() === 'upload'}>
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
-          <h2 class="font-serif text-[26px] font-medium leading-tight">
-            Show Brief one thing you've already written.
-          </h2>
-          <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
-            A past quote, your website, or even a rough email you sent a client. Brief reads it to learn your voice — the way you scope, the way you price, the way you sign off. It's the difference between Brief sounding like <em>you</em> and Brief sounding like a chatbot.
-          </p>
-          <div class="mt-6">
-            <Field label="Sample text">
-              <textarea
-                rows={10}
-                value={voiceText()}
-                onInput={(e) => setVoiceText(e.currentTarget.value)}
-                placeholder="Paste 5+ paragraphs from a real quote, email, or proposal…"
-                class="w-full px-3 py-2.5 rounded-lg text-sm text-[color:var(--color-ink)] font-sans bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] focus:outline-none focus:border-[color:var(--color-accent)] focus:shadow-[0_0_0_3px_var(--color-accent-tint)] resize-y min-h-[200px] leading-relaxed"
-              />
-            </Field>
-            <p class="mt-2 text-xs text-[color:var(--color-muted)] italic font-serif">
-              File upload + URL paste coming soon — text paste works today.
-            </p>
+        <div class="mt-7 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-6 shadow-[var(--shadow-sm)]">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-3">
+            Your business
           </div>
-          <div class="mt-6 flex items-center justify-between">
-            <Button variant="ghost" onClick={() => setStepIdx(3)}>
-              Skip for now — you'll have less polish
-            </Button>
-            <Button
-              variant="accent"
-              disabled={voiceText().trim().length < 200}
-              onClick={goToScan}
-            >
-              Scan this →
-            </Button>
-          </div>
-        </div>
-      </Show>
-
-      <Show when={stepId() === 'scan'}>
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
-          {/* Header row — eyebrow + serif H1 + big % readout (matches
-              design/mockups/01-welcome.png "Working on C-35 #1089342"
-              format applied to voice analysis). */}
-          <div class="flex items-start gap-6">
-            <div class="flex-1 min-w-0">
-              <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-                Brief is reading the sample
-              </div>
-              <h2 class="mt-1 font-serif text-[26px] font-medium leading-tight">
-                Picking up your voice.
-              </h2>
-            </div>
-            <div class="font-serif text-[32px] font-medium tabular-nums leading-none text-[color:var(--color-ink)]">
-              {Math.round(scanProgress())}<span class="text-[16px] text-[color:var(--color-muted)]">%</span>
-            </div>
-          </div>
-          <div class="mt-4 h-1 bg-[color:var(--color-bg-2)] rounded-full overflow-hidden">
-            <div
-              class="h-full bg-[color:var(--color-accent)] transition-all duration-300"
-              style={{ width: `${scanProgress()}%` }}
-            />
-          </div>
-          <Show when={scanError()}>
-            <div class="mt-4 rounded-lg bg-[color:var(--color-danger-tint)] px-4 py-3 text-sm text-[color:var(--color-danger)]">
-              {scanError()}. <button class="underline" onClick={startScan}>Try again</button>
-            </div>
-          </Show>
-          <div class="mt-6 space-y-2">
-            <For each={voiceSignals()}>
-              {(s) => (
-                <div class="rounded-lg border border-[color:var(--color-line)] bg-[color:var(--color-surface-2)] px-4 py-2.5 flex items-start gap-3 text-sm">
-                  <span class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] pt-1 min-w-[110px]">
-                    {s.kind.replace(/_/g, ' ')}
-                  </span>
-                  <div class="flex-1">
-                    <div class="text-[color:var(--color-ink)]">{s.value}</div>
-                    <Show when={s.evidence}>
-                      <div class="mt-1 text-xs italic text-[color:var(--color-muted)] font-serif">
-                        "{s.evidence}"
-                      </div>
-                    </Show>
-                  </div>
-                </div>
-              )}
-            </For>
-          </div>
-          <div class="mt-6 flex items-center justify-between">
-            <Button variant="ghost" onClick={back}>← Back</Button>
-            <Button
-              variant="accent"
-              disabled={scanProgress() < 100 && !scanError()}
-              onClick={next}
-            >
-              Continue →
-            </Button>
-          </div>
-        </div>
-      </Show>
-
-      <Show when={stepId() === 'license'}>
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
-          <h2 class="font-serif text-[26px] font-medium leading-tight">
-            Your license — for the bottom of every bid.
-          </h2>
-          <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
-            We print it on the footer of every quote and remind you when it's about to expire. Skip if you'd rather add it later — most clients will ask before they sign anyway.
-          </p>
-          <div class="mt-6 grid grid-cols-3 gap-4">
-            <Field label="License #" class="col-span-2">
-              <Input
-                value={profile().license_number}
-                onInput={(e) => updateProfile({ license_number: e.currentTarget.value })}
-                placeholder="C-35 #1089342"
-              />
-            </Field>
-            <Field label="State">
-              <Input
-                value={profile().license_jurisdiction}
-                onInput={(e) => updateProfile({ license_jurisdiction: e.currentTarget.value })}
-                placeholder="CA"
-                maxlength={4}
-              />
-            </Field>
-            <Field label="Classification" class="col-span-3">
-              <Input
-                value={profile().license_classification}
-                onInput={(e) => updateProfile({ license_classification: e.currentTarget.value })}
-                placeholder="C-35 Lathing and Plastering"
-              />
-            </Field>
-          </div>
-          <div class="mt-7 flex items-center justify-between">
-            <Button variant="ghost" onClick={back}>← Back</Button>
-            <Button variant="accent" onClick={next}>Continue →</Button>
-          </div>
-        </div>
-      </Show>
-
-      <Show when={stepId() === 'confirm'}>
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
-          <h2 class="font-serif text-[26px] font-medium leading-tight">
-            Your shop, on the record.
-          </h2>
-          <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
-            What clients see when Brief introduces your shop. You can change any of this later from Settings — nothing's locked in.
-          </p>
-          <div class="mt-6 grid grid-cols-2 gap-4">
-            <Field label="Legal name" class="col-span-2">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Field label="Legal or trade name" class="sm:col-span-2">
               <Input
                 value={profile().legal_name}
-                onInput={(e) => updateProfile({ legal_name: e.currentTarget.value })}
+                onInput={(e) => update({ legal_name: e.currentTarget.value })}
+                placeholder="L·A Stucco / Halsted & Sons / etc."
               />
             </Field>
-            <Field label="DBA / Trade name" class="col-span-2" helper="The name you actually go by on bids.">
+            <Field label="Your name">
               <Input
-                value={profile().trade_name}
-                onInput={(e) => updateProfile({ trade_name: e.currentTarget.value })}
-                placeholder="L·A Stucco"
+                value={profile().owner_name}
+                onInput={(e) => update({ owner_name: e.currentTarget.value })}
               />
             </Field>
-            <Field label="Owner email">
-              <Input value={props.ownerEmail} disabled />
+            <Field label="What you call this" helper="Plural? Just give us the singular noun.">
+              <Input
+                value={profile().business_noun}
+                onInput={(e) => update({ business_noun: e.currentTarget.value })}
+                placeholder="shop"
+                maxlength={32}
+              />
+              <div class="mt-1.5 flex flex-wrap gap-1.5">
+                <For each={NOUN_SUGGESTIONS}>
+                  {(n) => (
+                    <button
+                      type="button"
+                      onClick={() => update({ business_noun: n })}
+                      class={[
+                        'text-[11px] font-mono px-2 py-0.5 rounded-full border',
+                        profile().business_noun === n
+                          ? 'bg-[color:var(--color-accent-tint)] border-[color:var(--color-accent)] text-[color:var(--color-accent)]'
+                          : 'border-[color:var(--color-line-2)] text-[color:var(--color-muted)] hover:bg-[color:var(--color-surface-2)]',
+                      ].join(' ')}
+                    >
+                      {n}
+                    </button>
+                  )}
+                </For>
+              </div>
             </Field>
-          </div>
-          <div class="mt-7 flex items-center justify-between">
-            <Button variant="ghost" onClick={back}>← Back</Button>
-            <Button variant="accent" onClick={next}>Continue →</Button>
           </div>
         </div>
-      </Show>
 
-      <Show when={stepId() === 'defaults'}>
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
-          <h2 class="font-serif text-[26px] font-medium leading-tight">
-            How you price, by default.
-          </h2>
-          <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
-            Best guesses for now. Brief refines these as you close jobs — once we see 8 of them at a service line, the recommendation updates automatically. You'll always be the one who hits send.
-          </p>
-          <div class="mt-6 grid grid-cols-2 gap-4">
-            <Field label="Target margin %" helper="Industry standard for finishing trades runs 30–35%.">
-              <Input
-                type="number"
-                step="0.5"
-                value={profile().default_markup_pct}
-                onInput={(e) => updateProfile({ default_markup_pct: parseFloat(e.currentTarget.value || '0') })}
-              />
-            </Field>
-            <Field label="Loaded labor rate ($/hr)" helper="Burdened average across your crew.">
-              <Input
-                type="number"
-                step="1"
-                value={profile().default_labor_rate}
-                onInput={(e) => updateProfile({ default_labor_rate: parseFloat(e.currentTarget.value || '0') })}
-              />
-            </Field>
-          </div>
-          <div class="mt-7 flex items-center justify-between">
-            <Button variant="ghost" onClick={back}>← Back</Button>
-            <Button variant="accent" onClick={next}>Continue →</Button>
-          </div>
-        </div>
-      </Show>
-
-      <Show when={stepId() === 'calendar'}>
-        <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-10 shadow-[var(--shadow-sm)]">
-          <h2 class="font-serif text-[26px] font-medium leading-tight">
-            {props.calendarAlreadyConnected ? 'Your calendar is connected.' : 'One last thing — your calendar.'}
-          </h2>
-          <p class="mt-4 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
-            Brief reads your free/busy so it can suggest the best time to send a follow-up. Read-only — nothing gets posted to your calendar without your say-so. You can always disconnect from Settings.
-          </p>
-          <div class="mt-6 rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] px-5 py-4 flex items-center gap-4">
-            <div class="w-9 h-9 rounded-md bg-[color:var(--color-bg)] border border-[color:var(--color-line)] grid place-items-center shrink-0">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-                <rect x="2.5" y="3.5" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4" class="text-[color:var(--color-muted)]" />
-                <path d="M2.5 7h13M6 1.5v3M12 1.5v3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="text-[color:var(--color-muted)]" />
-              </svg>
+        <Show
+          when={showLicense()}
+          fallback={
+            <button
+              type="button"
+              onClick={() => setShowLicense(true)}
+              class="mt-3 text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)] underline"
+            >
+              + Add a license (optional — we stamp it on every quote)
+            </button>
+          }
+        >
+          <div class="mt-3 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-6 shadow-[var(--shadow-sm)]">
+            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-3">
+              License (optional)
             </div>
-            <div class="flex-1">
-              <div class="font-medium text-sm">Google Calendar</div>
-              <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
-                {calendarConnected() ? 'Connected — read-only access' : 'Not connected yet'}
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <Field label="Number" class="sm:col-span-2">
+                <Input
+                  value={profile().license_number}
+                  onInput={(e) => update({ license_number: e.currentTarget.value })}
+                  placeholder="C-35 #1089342"
+                />
+              </Field>
+              <Field label="State">
+                <Input
+                  value={profile().license_jurisdiction}
+                  onInput={(e) => update({ license_jurisdiction: e.currentTarget.value })}
+                  placeholder="CA"
+                  maxlength={4}
+                />
+              </Field>
+              <Field label="Classification" class="sm:col-span-3">
+                <Input
+                  value={profile().license_classification}
+                  onInput={(e) => update({ license_classification: e.currentTarget.value })}
+                  placeholder="C-35 Lathing and Plastering"
+                />
+              </Field>
+            </div>
+          </div>
+        </Show>
+
+        <div class="mt-8 flex items-center justify-between">
+          <a
+            href="/auth/signout"
+            class="text-xs text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)]"
+          >
+            Sign out
+          </a>
+          <Button
+            variant="accent"
+            disabled={!canContinueStep1()}
+            onClick={() => setStep(2)}
+          >
+            Continue →
+          </Button>
+        </div>
+      </Show>
+
+      <Show when={step() === 2}>
+        <h1 class="font-serif text-[40px] font-medium leading-tight">
+          Show Brief one thing you've already written.
+        </h1>
+        <p class="mt-3 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[55ch]">
+          A past quote, your website, or a few paragraphs you sent a client.
+          Brief reads it to learn your voice — the way you scope, the way you
+          sign off. Skip if you'd rather; we'll learn as you go.
+        </p>
+
+        <div class="mt-7 rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-6 shadow-[var(--shadow-sm)]">
+          {/* Three intake methods on one card. Whichever the operator
+              uses populates the same `sampleText` signal, which the
+              analyzer reads on finish. */}
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label
+              class={[
+                'rounded-lg border border-dashed px-4 py-3 cursor-pointer transition-colors',
+                pdfChip()
+                  ? 'border-[color:var(--color-accent)] bg-[color:var(--color-accent-tint)]'
+                  : 'border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] hover:border-[color:var(--color-accent)]',
+              ].join(' ')}
+            >
+              <input
+                type="file"
+                accept="application/pdf,.pdf"
+                class="sr-only"
+                onChange={(e) => {
+                  const f = e.currentTarget.files?.[0];
+                  if (f) handlePdf(f);
+                }}
+              />
+              <div class="flex items-start gap-3">
+                <svg width="20" height="20" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" class="text-[color:var(--color-muted)] shrink-0 mt-0.5" aria-hidden="true">
+                  <path d="M7 4h7l4 4v9.5a1.5 1.5 0 0 1 -1.5 1.5h-9.5a1.5 1.5 0 0 1 -1.5 -1.5v-12a1.5 1.5 0 0 1 1.5 -1.5z" />
+                  <path d="M14 4v4h4" />
+                  <path d="M11 18v-4M9 16l2 -2 2 2" stroke-linecap="round" />
+                </svg>
+                <div class="flex-1 min-w-0">
+                  <div class="font-medium text-sm">Drop a PDF</div>
+                  <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
+                    Past quote, proposal, or RFP response
+                  </div>
+                  <Show when={pdfChip()}>
+                    <div class="mt-1.5 text-[11.5px] font-mono text-[color:var(--color-accent)]">
+                      ✓ {pdfChip()!.name} · {pdfChip()!.chars.toLocaleString()} chars
+                    </div>
+                  </Show>
+                </div>
+              </div>
+            </label>
+
+            <div class="rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] px-4 py-3">
+              <div class="flex items-start gap-3">
+                <svg width="20" height="20" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" class="text-[color:var(--color-muted)] shrink-0 mt-0.5" aria-hidden="true">
+                  <path d="M10 12.5l3 -3M5.5 14.5a3 3 0 0 1 0 -4l3 -3a3 3 0 0 1 4 0M16.5 7.5a3 3 0 0 1 0 4l-3 3a3 3 0 0 1 -4 0" />
+                </svg>
+                <div class="flex-1 min-w-0">
+                  <div class="font-medium text-sm">Or paste a website URL</div>
+                  <div class="text-xs text-[color:var(--color-muted)] mt-0.5">
+                    Brief reads your About / Services page
+                  </div>
+                  <div class="mt-2 flex gap-1.5">
+                    <input
+                      type="url"
+                      value={sampleUrl()}
+                      onInput={(e) => setSampleUrl(e.currentTarget.value)}
+                      placeholder="example.com"
+                      class="flex-1 min-w-0 px-2 py-1 rounded text-xs bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] focus:outline-none focus:border-[color:var(--color-accent)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={fetchUrl}
+                      disabled={sampleBusy() || !sampleUrl().trim()}
+                      class="text-xs font-medium px-2 py-1 rounded bg-[color:var(--color-accent)] text-[color:var(--color-accent-ink)] disabled:opacity-50"
+                    >
+                      Fetch
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
-            <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                checked={calendarConnected()}
-                onChange={(e) => setCalendarConnected(e.currentTarget.checked)}
-                class="w-4 h-4 accent-[color:var(--color-accent)] cursor-pointer"
-              />
-              <span class="font-medium">{calendarConnected() ? 'Enabled' : 'Enable'}</span>
-            </label>
           </div>
-          <p class="mt-3 text-xs italic font-serif text-[color:var(--color-muted)]">
-            That's fine if you'd rather skip — Brief works without it; you'll just schedule sends manually instead of getting suggestions.
-          </p>
-          <div class="mt-7 flex items-center justify-between">
-            <Button variant="ghost" onClick={back}>← Back</Button>
-            <Button variant="accent" disabled={finishing()} onClick={finish}>
-              {finishing() ? 'Saving…' : "Finish setup →"}
+
+          <div class="mt-5">
+            <Field label="Or paste 5+ paragraphs" helper="Any old quote, proposal, or email you sent a client.">
+              <textarea
+                rows={8}
+                value={sampleText()}
+                onInput={(e) => setSampleText(e.currentTarget.value)}
+                placeholder="Drop in any text Brief can learn your voice from…"
+                class="w-full px-3 py-2.5 rounded-lg text-sm text-[color:var(--color-ink)] font-sans bg-[color:var(--color-surface)] border border-[color:var(--color-line-2)] focus:outline-none focus:border-[color:var(--color-accent)] focus:shadow-[0_0_0_3px_var(--color-accent-tint)] resize-y leading-relaxed"
+              />
+            </Field>
+            <div class="mt-1 text-[11px] text-[color:var(--color-muted)] font-mono">
+              {sampleText().length.toLocaleString()} chars
+              {sampleText().length > 0 && sampleText().length < 50 && (
+                <span class="text-[color:var(--color-warn)]"> · need at least 50 to learn anything</span>
+              )}
+            </div>
+          </div>
+
+          <Show when={sampleBusy()}>
+            <div class="mt-2 text-xs text-[color:var(--color-muted)] italic font-serif">
+              Reading…
+            </div>
+          </Show>
+          <Show when={sampleError()}>
+            <div class="mt-2 text-xs text-[color:var(--color-danger)]">{sampleError()}</div>
+          </Show>
+        </div>
+
+        <Show when={finishError()}>
+          <div class="mt-4 rounded-lg bg-[color:var(--color-danger-tint)] px-4 py-3 text-sm text-[color:var(--color-danger)]">
+            {finishError()}
+          </div>
+        </Show>
+
+        <div class="mt-8 flex items-center justify-between gap-3">
+          <Button variant="ghost" onClick={() => setStep(1)}>← Back</Button>
+          <div class="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => finish({ withSample: false })}
+              disabled={finishing()}
+              class="text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)] underline"
+            >
+              Skip — I'll add later
+            </button>
+            <Button
+              variant="accent"
+              disabled={finishing() || sampleText().trim().length < 50}
+              onClick={() => finish({ withSample: true })}
+            >
+              {finishing() ? 'Finishing…' : 'Finish setup →'}
             </Button>
           </div>
-        </div>
-      </Show>
-    </div>
-  );
-}
-
-function PublicLookupPanel(p: {
-  businessName: () => string;
-  setBusinessName: (v: string) => void;
-  state: () => string;
-  setState: (v: string) => void;
-  websiteUrl: () => string;
-  setWebsiteUrl: (v: string) => void;
-  busy: () => boolean;
-  triggered: () => boolean;
-  matches: () => PublicMatch[];
-  error: () => string | null;
-  ownerName: string;
-  onRun: () => void;
-  onAccept: (m: PublicMatch) => void;
-  onCancel: () => void;
-  onSkip: () => void;
-}) {
-  const ready = () => !!p.businessName().trim() || !!p.websiteUrl().trim();
-  return (
-    <div>
-      <div class="flex items-baseline gap-3">
-        <h2 class="font-serif text-[26px] font-medium leading-tight flex-1">
-          What should we look up?
-        </h2>
-        <button
-          type="button"
-          onClick={p.onCancel}
-          class="text-xs text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)]"
-        >
-          ← Back
-        </button>
-      </div>
-      <p class="mt-3 text-[15px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
-        Drop in your business name + state, or your shop's website URL. Brief
-        fetches what's public — license #, classification, address — and shows
-        you what it found <em>before</em> anything gets saved.
-      </p>
-
-      <div class="mt-6 grid grid-cols-1 sm:grid-cols-[1fr_120px] gap-3">
-        <Field label="Business name">
-          <Input
-            value={p.businessName()}
-            onInput={(e) => p.setBusinessName(e.currentTarget.value)}
-            placeholder={p.ownerName || 'L·A Stucco'}
-          />
-        </Field>
-        <Field label="State">
-          <Input
-            value={p.state()}
-            onInput={(e) => p.setState(e.currentTarget.value.toUpperCase())}
-            placeholder="CA"
-            maxlength={4}
-          />
-        </Field>
-      </div>
-      <div class="mt-3">
-        <Field label="Website (optional)" helper="If your shop has one, we'll pull license / address from the footer.">
-          <Input
-            value={p.websiteUrl()}
-            onInput={(e) => p.setWebsiteUrl(e.currentTarget.value)}
-            placeholder="example.com"
-          />
-        </Field>
-      </div>
-      <div class="mt-5 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={p.onSkip}
-          class="text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)] underline"
-        >
-          Skip — I'll fill it in myself
-        </button>
-        <Button variant="accent" disabled={!ready() || p.busy()} onClick={p.onRun}>
-          {p.busy() ? 'Searching…' : 'Search public records'}
-        </Button>
-      </div>
-
-      <Show when={p.error()}>
-        <div class="mt-5 rounded-lg bg-[color:var(--color-danger-tint)] px-4 py-3 text-sm text-[color:var(--color-danger)]">
-          {p.error()}
-        </div>
-      </Show>
-
-      <Show when={p.triggered() && !p.busy() && p.matches().length === 0 && !p.error()}>
-        <div class="mt-6 rounded-lg border border-dashed border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] px-5 py-5 text-center">
-          <div class="text-sm text-[color:var(--color-ink-2)] font-serif italic">
-            Nothing public came back. That's normal — most small shops don't
-            have a registry entry. Fill the profile in yourself; it's a minute.
-          </div>
-          <button
-            type="button"
-            onClick={p.onSkip}
-            class="mt-3 text-sm text-[color:var(--color-accent)] underline"
-          >
-            Fill it in myself →
-          </button>
-        </div>
-      </Show>
-
-      <Show when={p.matches().length > 0}>
-        <div class="mt-6 space-y-3">
-          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
-            {p.matches().length} result{p.matches().length === 1 ? '' : 's'}
-          </div>
-          <For each={p.matches()}>
-            {(m) => (
-              <article class="rounded-lg border border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] p-4">
-                <div class="flex items-baseline gap-2 mb-1">
-                  <span class="text-[11px] font-mono uppercase tracking-wide text-[color:var(--color-muted)]">
-                    {m.source_label}
-                  </span>
-                  <span class="flex-1" />
-                  <a
-                    href={m.evidence_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="text-xs text-[color:var(--color-accent)] underline"
-                  >
-                    Source ↗
-                  </a>
-                </div>
-                <h3 class="font-serif text-[18px] font-medium leading-tight">
-                  {m.legal_name ?? '(no legal name found)'}
-                </h3>
-                <Show when={m.trade_name && m.trade_name !== m.legal_name}>
-                  <p class="text-[13px] italic font-serif text-[color:var(--color-muted)] mt-0.5">
-                    dba {m.trade_name}
-                  </p>
-                </Show>
-                <dl class="mt-3 grid grid-cols-2 gap-y-1.5 text-[13px]">
-                  <Show when={m.license_number}>
-                    <dt class="text-[color:var(--color-muted)]">License #</dt>
-                    <dd class="font-mono">
-                      {m.license_number}
-                      <Show when={m.license_classification}>
-                        <span class="text-[color:var(--color-muted)] ml-1">({m.license_classification})</span>
-                      </Show>
-                      <Show when={m.license_jurisdiction}>
-                        <span class="text-[color:var(--color-muted)] ml-1">· {m.license_jurisdiction}</span>
-                      </Show>
-                    </dd>
-                  </Show>
-                  <Show when={m.address}>
-                    <dt class="text-[color:var(--color-muted)]">Address</dt>
-                    <dd>{m.address}</dd>
-                  </Show>
-                  <Show when={m.phone}>
-                    <dt class="text-[color:var(--color-muted)]">Phone</dt>
-                    <dd class="font-mono">{m.phone}</dd>
-                  </Show>
-                  <Show when={m.email}>
-                    <dt class="text-[color:var(--color-muted)]">Email</dt>
-                    <dd>{m.email}</dd>
-                  </Show>
-                </dl>
-                <Show when={m.evidence_excerpt}>
-                  <p class="mt-3 text-[12.5px] font-serif italic text-[color:var(--color-muted)] leading-relaxed border-t border-[color:var(--color-line)] pt-2.5">
-                    "{m.evidence_excerpt}"
-                  </p>
-                </Show>
-                <div class="mt-4 flex justify-end">
-                  <Button variant="accent" onClick={() => p.onAccept(m)}>
-                    Use this →
-                  </Button>
-                </div>
-              </article>
-            )}
-          </For>
         </div>
       </Show>
     </div>

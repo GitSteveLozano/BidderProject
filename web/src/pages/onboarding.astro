@@ -20,7 +20,7 @@ if (!user || !membership || !env) {
 const svc = supabaseService(env, 'service');
 const { data: shop } = await svc
   .from('shops')
-  .select('onboarding_completed_at, google_calendar_connected, owner_name, owner_email')
+  .select('onboarding_completed_at, owner_name, owner_email')
   .eq('id', membership.shop_id)
   .maybeSingle();
 
@@ -38,6 +38,5 @@ const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? 'there').spli
     ownerName={shop?.owner_name ?? user.name ?? ''}
     ownerEmail={shop?.owner_email ?? user.email ?? ''}
     ownerFirst={ownerFirst}
-    calendarAlreadyConnected={!!shop?.google_calendar_connected}
   />
 </Base>
