@@ -140,9 +140,27 @@ export const POST: APIRoute = async ({ request, locals }) => {
         const scope_summary = typeof parsed?.scope_summary === 'string' ? parsed!.scope_summary : '';
 
         for (let i = 0; i < line_items.length; i += 1) {
-          const li = line_items[i];
-          const subtotal = round(Number(li.qty ?? 0) * Number(li.unit_price ?? 0), 2);
-          emit({ type: 'line_item', payload: { ...li, position: i + 1, subtotal } });
+          const raw = line_items[i] ?? {};
+          // Defensive numeric coercion. Llama occasionally omits
+          // unit_price or qty on JSON-mode output; without a fallback
+          // the client crashes when it tries `.toFixed()` on undefined.
+          const qty = Number(raw.qty ?? 0);
+          const unit_price = Number(raw.unit_price ?? 0);
+          const subtotal = round(qty * unit_price, 2);
+          emit({
+            type: 'line_item',
+            payload: {
+              description: typeof raw.description === 'string' ? raw.description : '(unknown)',
+              qty,
+              unit: typeof raw.unit === 'string' ? raw.unit : 'lump_sum',
+              unit_price,
+              subtotal,
+              category: typeof raw.category === 'string' ? raw.category : 'other',
+              confidence: typeof raw.confidence === 'string' ? raw.confidence : 'low',
+              source_excerpt: typeof raw.source_excerpt === 'string' ? raw.source_excerpt : null,
+              position: i + 1,
+            },
+          });
         }
         for (const f of flags) emit({ type: 'flag', payload: f });
 

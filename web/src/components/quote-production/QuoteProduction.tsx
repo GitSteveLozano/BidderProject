@@ -942,7 +942,7 @@ function ScopeStep(p: {
                   <div class="flex-1 min-w-0">
                     <div class="text-sm text-[color:var(--color-ink)]">{li.description}</div>
                     <div class="text-xs text-[color:var(--color-muted)] mt-1">
-                      {li.qty} {li.unit} · ${li.unit_price.toFixed(2)}/u · ${li.subtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      {li.qty} {li.unit} · ${Number(li.unit_price ?? 0).toFixed(2)}/u · ${Number(li.subtotal ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                     </div>
                     <Show when={li.source_excerpt}>
                       <div class="mt-1.5 text-xs italic text-[color:var(--color-muted)] font-serif">
