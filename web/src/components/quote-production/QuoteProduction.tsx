@@ -1627,6 +1627,20 @@ function ReviewStep(p: {
   const fmt = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const recipient = () => p.clientContact()?.trim() || p.clientName();
 
+  // Sending-to panel edit/view toggle. Stable local state — must NOT
+  // be derived from the live signal value, or typing the first
+  // character into the email field flips the panel and unmounts the
+  // input mid-keystroke (Solid's reactive Show evaluating on every
+  // signal change). Initial mode is decided at mount, then only
+  // changes via explicit user action (Done / Edit buttons).
+  const [editingContact, setEditingContact] = createSignal(
+    !p.clientContactEmail().trim(),
+  );
+  const emailLooksValid = () => {
+    const e = p.clientContactEmail().trim();
+    return e.length > 3 && e.includes('@') && e.includes('.');
+  };
+
   // Pre-send readiness checks — each row gets a green check or a soft warning.
   const checks = createMemo(() => {
     const items = p.lineItems();
@@ -1693,25 +1707,38 @@ function ReviewStep(p: {
           <div
             class={[
               'rounded-xl border p-5',
-              p.clientContactEmail().trim()
-                ? 'border-[color:var(--color-line)] bg-[color:var(--color-surface)]'
-                : 'border-[color:var(--color-warn)] bg-[color:var(--color-warn-tint)]',
+              editingContact() && !p.clientContactEmail().trim()
+                ? 'border-[color:var(--color-warn)] bg-[color:var(--color-warn-tint)]'
+                : 'border-[color:var(--color-line)] bg-[color:var(--color-surface)]',
             ].join(' ')}
           >
-            <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)] mb-2">
-              Sending to
+            <div class="flex items-baseline justify-between mb-2">
+              <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">
+                Sending to
+              </div>
+              <Show when={!editingContact()}>
+                <button
+                  type="button"
+                  onClick={() => setEditingContact(true)}
+                  class="text-[11px] font-mono uppercase tracking-wide text-[color:var(--color-muted-2)] hover:text-[color:var(--color-ink)]"
+                >
+                  Edit
+                </button>
+              </Show>
             </div>
             <Show
-              when={p.clientContactEmail().trim()}
+              when={!editingContact()}
               fallback={
                 <div>
-                  <p class="text-[14px] font-medium text-[color:var(--color-warn)] leading-snug">
-                    No email on file.
-                  </p>
-                  <p class="mt-1.5 text-[12.5px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
-                    Add one here and Brief will deliver the quote. Leave blank
-                    to save without sending.
-                  </p>
+                  <Show when={!p.clientContactEmail().trim()}>
+                    <p class="text-[14px] font-medium text-[color:var(--color-warn)] leading-snug">
+                      No email on file.
+                    </p>
+                    <p class="mt-1.5 text-[12.5px] font-serif text-[color:var(--color-ink-2)] leading-relaxed">
+                      Add one here and Brief will deliver the quote. Leave blank
+                      to save without sending.
+                    </p>
+                  </Show>
                   <div class="mt-3 space-y-2">
                     <Field label="Contact email">
                       <Input
@@ -1734,6 +1761,16 @@ function ReviewStep(p: {
                         placeholder="+1…"
                       />
                     </Field>
+                  </div>
+                  <div class="mt-3 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setEditingContact(false)}
+                      disabled={!p.clientContactEmail().trim() ? false : !emailLooksValid()}
+                      class="font-mono text-[11px] uppercase tracking-wide border border-[color:var(--color-ink)] bg-[color:var(--color-ink)] text-[color:var(--color-surface)] disabled:opacity-50 disabled:cursor-not-allowed px-3 py-1.5 rounded-sm"
+                    >
+                      {p.clientContactEmail().trim() ? 'Done' : 'Skip — save without sending'}
+                    </button>
                   </div>
                 </div>
               }
