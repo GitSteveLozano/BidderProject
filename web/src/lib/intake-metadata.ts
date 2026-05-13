@@ -147,6 +147,17 @@ const ADDRESSEE_LABELS = '(?:Bill\\s+To|Sold\\s+To|Ship\\s+To|Attn(?:ention)?|Cu
 const PROJECT_LABELS = '(?:Project\\s+Name|Job\\s+Name|Job\\s+Site|Project(?=\\s*:)|Job(?=\\s*:)|Re(?=\\s*:))';
 const PROJECT_BOILERPLATE = /^(scope|proposal|quote|estimate|bid|work|description)\b/i;
 
+// First email and phone-number pattern in the document, no scoping.
+// The doc could be the contractor's own letterhead (matches their
+// contact) or a client RFP (matches the client's). Operator validates
+// either way — better to save typing than to be conservative.
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+// 10-digit phone with optional country code and common separators.
+// 10 consecutive significant digits is rare outside phone numbers in
+// these docs (GST IDs are 9, dates are 8, invoice numbers shorter)
+// so this avoids most false positives without being over-strict.
+const PHONE_RE = /(?:\+?1[\s.-]?)?\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/;
+
 function regexExtract(text: string): Partial<IntakeMetadata> {
   const result: Partial<IntakeMetadata> = {};
 
@@ -172,6 +183,12 @@ function regexExtract(text: string): Partial<IntakeMetadata> {
       result.project_address = projMatch;
     }
   }
+
+  const email = text.match(EMAIL_RE);
+  if (email) result.contact_email = email[0];
+
+  const phone = text.match(PHONE_RE);
+  if (phone) result.contact_phone = phone[0].trim();
 
   return result;
 }
