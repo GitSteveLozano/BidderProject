@@ -111,16 +111,51 @@ export interface ExtractOptions {
   hints?: { client_name?: string; project_title?: string };
 }
 
+/** Diagnostic envelope returned alongside the parsed result. Surfaced
+ * in the endpoint response so operators / Claude can debug from the
+ * browser network tab when extraction silently fails. */
+export interface ExtractDebug {
+  has_ai_binding: boolean;
+  text_length: number;
+  text_sample: string;       // first 200 chars
+  prompt_skipped_reason: string | null;
+  raw_response: string | null;  // first 600 chars of model output
+  parsed_ok: boolean;
+  all_null: boolean;
+  error: string | null;
+}
+
+export interface ExtractResult {
+  metadata: IntakeMetadata;
+  debug: ExtractDebug;
+}
+
 export async function extractIntakeMetadata(
   env: CloudflareEnv,
   rawText: string,
   opts: ExtractOptions = {},
-): Promise<IntakeMetadata> {
-  if (!env.AI) return { ...EMPTY };
+): Promise<ExtractResult> {
   const cleaned = (rawText ?? '').trim();
-  // Dropped from 50 → 30 chars. A short voice transcript like
-  // "Halsted, 418 Ridgemoor, stucco re-do" is enough to extract from.
-  if (cleaned.length < 30) return { ...EMPTY };
+  const debug: ExtractDebug = {
+    has_ai_binding: !!env.AI,
+    text_length: cleaned.length,
+    text_sample: cleaned.slice(0, 200),
+    prompt_skipped_reason: null,
+    raw_response: null,
+    parsed_ok: false,
+    all_null: false,
+    error: null,
+  };
+
+  if (!env.AI) {
+    debug.prompt_skipped_reason = 'no AI binding (env.AI undefined)';
+    return { metadata: { ...EMPTY }, debug };
+  }
+  // 30 chars is enough for "Cavy, Halsted stucco re-do, 418 Ridgemoor"
+  if (cleaned.length < 30) {
+    debug.prompt_skipped_reason = `text under 30 chars (got ${cleaned.length})`;
+    return { metadata: { ...EMPTY }, debug };
+  }
   const text = cleaned.slice(0, 8000);
 
   const hintLine =
@@ -142,11 +177,13 @@ export async function extractIntakeMetadata(
         },
       ],
     });
+    debug.raw_response = (response ?? '').slice(0, 600);
     const parsed = extractJson<Partial<IntakeMetadata>>(response);
     if (!parsed) {
       console.warn('[intake-metadata] could not parse JSON, raw:', response.slice(0, 300));
-      return { ...EMPTY };
+      return { metadata: { ...EMPTY }, debug };
     }
+    debug.parsed_ok = true;
     const result: IntakeMetadata = {
       client_name: clean(parsed.client_name),
       contact_name: clean(parsed.contact_name),
@@ -155,7 +192,8 @@ export async function extractIntakeMetadata(
       project_title: clean(parsed.project_title),
       project_address: clean(parsed.project_address),
     };
-    if (!result.client_name && !result.project_title && !result.contact_name) {
+    debug.all_null = !result.client_name && !result.project_title && !result.contact_name;
+    if (debug.all_null) {
       console.warn(
         '[intake-metadata] all-null on text len',
         text.length,
@@ -163,10 +201,11 @@ export async function extractIntakeMetadata(
         response.slice(0, 200),
       );
     }
-    return result;
+    return { metadata: result, debug };
   } catch (e) {
+    debug.error = e instanceof Error ? e.message : String(e);
     console.warn('[intake-metadata] generation failed', e);
-    return { ...EMPTY };
+    return { metadata: { ...EMPTY }, debug };
   }
 }
 

@@ -92,7 +92,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
   }
 
   const text = (chosen?.text ?? '').trim();
-  const metadata = text.length > 0 ? await extractIntakeMetadata(env, text) : null;
+  const extract = text.length > 0 ? await extractIntakeMetadata(env, text) : null;
   return json(
     {
       text,
@@ -101,7 +101,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
       file_size: file.size,
       file_type: file.type,
       empty_text: text.length === 0,
-      metadata,
+      metadata: extract?.metadata ?? null,
+      metadata_debug: extract?.debug ?? null,
       tried,
     },
     200,

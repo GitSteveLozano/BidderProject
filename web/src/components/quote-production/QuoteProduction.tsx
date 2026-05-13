@@ -694,7 +694,21 @@ function PdfIntake(p: {
       fd.append('file', file);
       const resp = await fetch('/api/intake/extract-pdf', { method: 'POST', body: fd });
       if (!resp.ok) throw new Error(await resp.text());
-      const data = await resp.json() as { text: string; page_count: number; empty_text: boolean; filename: string; metadata?: IntakeMetadata | null };
+      const data = (await resp.json()) as {
+        text: string;
+        page_count: number;
+        empty_text: boolean;
+        filename: string;
+        metadata?: IntakeMetadata | null;
+        metadata_debug?: unknown;
+      };
+      // Always log the metadata envelope so silent failures are
+      // visible in DevTools without instrumenting the server. Cheap.
+      console.info('[intake/extract-pdf]', {
+        text_chars: data.text.length,
+        metadata: data.metadata,
+        metadata_debug: data.metadata_debug,
+      });
       if (data.empty_text) {
         setError('Brief read the PDF but found no selectable text — looks scanned. Try the voice or paste option instead.');
         return;
@@ -912,7 +926,7 @@ function VoiceIntake(p: {
               : 'recording.wav';
       fd.append('file', blob, filename);
       const resp = await fetch('/api/intake/transcribe', { method: 'POST', body: fd });
-      const data = await resp.json().catch(() => null) as
+      const data = (await resp.json().catch(() => null)) as
         | {
             text?: string;
             duration_seconds?: number | null;
@@ -922,8 +936,14 @@ function VoiceIntake(p: {
             file_size?: number;
             tried?: Array<{ model: string; ok: boolean; chars: number; error?: string }>;
             metadata?: IntakeMetadata | null;
+            metadata_debug?: unknown;
           }
         | null;
+      console.info('[intake/transcribe]', {
+        text_chars: data?.text?.length ?? 0,
+        metadata: data?.metadata,
+        metadata_debug: data?.metadata_debug,
+      });
       if (!resp.ok) {
         throw new Error(data?.error || `Server returned ${resp.status}`);
       }
