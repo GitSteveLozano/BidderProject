@@ -5,6 +5,7 @@ import LineItemsTable from '@/components/quotes/LineItemsTable';
 import LogReplyButton from '@/components/quotes/LogReplyButton';
 import MarkOutcomeButtons from '@/components/quotes/MarkOutcomeButtons';
 import QuotePostmortem from '@/components/quotes/QuotePostmortem';
+import QuoteReplyDrawer from '@/components/quotes/QuoteReplyDrawer';
 import { client as supabaseService } from '@/lib/supabase';
 import { fmtCurrencyFull, fmtRelativeDate } from '@/lib/quote-helpers';
 
@@ -64,6 +65,40 @@ const eventLabels: Record<string, string> = {
   'quote.won': 'Marked won',
   'quote.lost': 'Marked lost',
 };
+
+// Build the AgendaQuote shape the drawer expects.
+const ageDays = (() => {
+  const ref = quote.sent_at ?? quote.created_at;
+  if (!ref) return 0;
+  return Math.max(0, Math.floor((Date.now() - new Date(ref).getTime()) / 86_400_000));
+})();
+const agendaQuote = {
+  id: quote.id as string,
+  ref: quote.ref as string,
+  client_name: quote.client_name as string,
+  project_title: quote.project_title as string,
+  state: quote.state as 'DRAFT' | 'SENT' | 'AWAITING' | 'RESPONDED' | 'WON' | 'LOST',
+  total: Number(quote.total ?? 0),
+  next_step: (quote.next_step as string | null) ?? null,
+  age_days: ageDays,
+  sent_at: quote.sent_at as string | null,
+  responded_at: quote.responded_at as string | null,
+  created_at: quote.created_at as string,
+};
+
+// Most recent inbound message — feeds Reply mode's "client wrote" block.
+const lastInbound = (messages ?? []).find((m: any) => m.direction === 'inbound');
+const inboundForDrawer = lastInbound
+  ? {
+      sender:
+        (lastInbound.sender_name as string) ||
+        (lastInbound.sender_email as string) ||
+        (quote.client_contact_name as string) ||
+        (quote.client_name as string),
+      sent_at: new Date(lastInbound.created_at as string).toLocaleString(),
+      body: (lastInbound.body as string) || '',
+    }
+  : undefined;
 ---
 
 <Brief
@@ -256,4 +291,10 @@ const eventLabels: Record<string, string> = {
       </div>
     </aside>
   </div>
+
+  {/* Hash-driven reply/nudge drawer. Opens when the URL hash is
+      #reply or #nudge — wired from the dashboard's "Reply" / "Nudge"
+      buttons and the quote's own "Send reminder" / "Reply to client"
+      anchor. Idempotent: closing strips the hash. */}
+  <QuoteReplyDrawer client:load quote={agendaQuote} inbound={inboundForDrawer} />
 </Brief>
