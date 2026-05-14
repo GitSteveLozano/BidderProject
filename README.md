@@ -1,10 +1,10 @@
 # Brief
 
-Bid production and pipeline operations for finishing-trade contractors.
+Bid production and pipeline operations for contractors.
 
 > Brief proposes; you decide.
 
-A specialty contractor's workday isn't email or spreadsheets — it's standing on a job site, talking through a scope, then writing a quote that night that has to be right or you lose the next three. Brief produces those quotes in ten minutes instead of three hours, tracks them through reply/nudge/win/loss, reconciles delivered margin against quoted margin, and shows you the patterns once enough jobs have closed.
+A specialty contractor's workday isn't email or spreadsheets — it's standing in a project, talking through a scope, then writing a quote that night that has to be right or you lose the next three. Brief produces those quotes in ten minutes instead of three hours, tracks them through reply/nudge/win/loss, reconciles delivered margin against quoted margin, and shows you the patterns once enough jobs have closed.
 
 ## Status
 
