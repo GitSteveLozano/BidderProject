@@ -25,6 +25,7 @@ import { lineItemsToCostCandidates, persistCostRecords } from '@/lib/cost-record
 import { classifyAndExtract } from '@/lib/intake-agent';
 import { findMatchingProjects, projectSignalText } from '@/lib/projects';
 import { client as supabaseService } from '@/lib/supabase';
+import { normalizeTakeoffItems } from '@/lib/takeoff-parser';
 
 export const prerender = false;
 
@@ -91,6 +92,13 @@ export const POST: APIRoute = async ({ request, locals }) => {
 
   // Classify + extract.
   const extract = await classifyAndExtract(env, trimmed);
+
+  // Takeoff post-processing: unit aliases, dimension → area, section
+  // header detection. Cheap pure-text math, runs only when the doc is
+  // classified as `takeoff`.
+  if (extract.classification === 'takeoff' && extract.line_items.length > 0) {
+    extract.line_items = normalizeTakeoffItems(extract.line_items);
+  }
 
   // Persist as a free-floating intake_documents row (project_id null).
   // The client UI gathers all uploads, lets the operator confirm
