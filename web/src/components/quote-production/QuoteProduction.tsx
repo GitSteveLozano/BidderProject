@@ -104,6 +104,17 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
   const [proposalStyle, setProposalStyle] = createSignal<
     'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown'
   >('project_quote');
+  // Direction + doc_kind — added in Phase 1 of the multi-doc-intake
+  // refactor. When direction != 'outbound', the wizard surfaces a
+  // warning (the doc looks like an input artifact, not an outbound
+  // quote). Phase 2 will route inbound docs to a project file directly.
+  const [docKind, setDocKind] = createSignal<
+    | 'project_quote' | 'partnership' | 'consulting' | 'rfi_received'
+    | 'change_request' | 'architectural_plan' | 'elevation_drawing'
+    | 'engineer_sealed' | 'spec_template' | 'takeoff'
+    | 'selections_list' | 'email_thread' | 'vendor_invoice' | 'unknown'
+  >('project_quote');
+  const [direction, setDirection] = createSignal<'outbound' | 'inbound' | 'operator_own'>('outbound');
   const [proposalConfidence, setProposalConfidence] = createSignal(1);
   const [programType, setProgramType] = createSignal<'one_off' | 'recurring' | 'rebate' | null>(null);
   const [termMonths, setTermMonths] = createSignal<number | null>(null);
@@ -254,6 +265,8 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
     setScanning(true);
     // Reset proposal classification state for each run.
     setProposalStyle('project_quote');
+    setDocKind('project_quote');
+    setDirection('outbound');
     setProposalConfidence(1);
     setProgramType(null);
     setTermMonths(null);
@@ -320,6 +333,12 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
             setProposalConfidence(payload.payload?.confidence ?? 1);
             setProgramType(payload.payload?.program_type ?? null);
             setTermMonths(payload.payload?.term_months ?? null);
+            if (payload.payload?.direction) {
+              setDirection(payload.payload.direction);
+            }
+            if (payload.payload?.doc_kind) {
+              setDocKind(payload.payload.doc_kind);
+            }
             // Offer-axis auto-detection: scan returns the suggested
             // offer_kind + pricing_structure. Operator can override
             // on the Offer step picker.
@@ -631,6 +650,8 @@ export default function QuoteProduction(props: { shop: ShopContext }) {
           flags={flags}
           scopeSummary={scopeSummary}
           proposalStyle={proposalStyle}
+          direction={direction}
+          docKind={docKind}
           proposalConfidence={proposalConfidence}
           phases={phases}
           setPhases={setPhases}
@@ -1396,6 +1417,8 @@ function ScopeStep(p: {
   flags: () => Flag[];
   scopeSummary: () => string;
   proposalStyle: () => 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown';
+  direction: () => 'outbound' | 'inbound' | 'operator_own';
+  docKind: () => string;
   proposalConfidence: () => number;
   phases: () => Phase[];
   setPhases: (p: Phase[]) => void;
@@ -1483,6 +1506,71 @@ function ScopeStep(p: {
         <div class="mt-4 rounded-lg bg-[color:var(--color-danger-tint)] px-4 py-3 text-sm text-[color:var(--color-danger)]">
           {p.error()}.{' '}
           <button class="underline" onClick={p.onRetry}>Retry</button>
+        </div>
+      </Show>
+
+      {/* Inbound / operator-own banner. Scan classified the doc as
+          something that isn't an outbound proposal (a plan, an
+          invoice, a selections list, an email thread). Phase 1 ships
+          the warning; Phase 2 will route directly to a project file. */}
+      <Show when={!p.scanning() && p.direction() !== 'outbound'}>
+        <div class="mt-6 rounded-xl border border-[color:var(--color-warn,#a85432)] bg-[color:var(--color-warn-tint,#fcefe6)] p-5">
+          <div class="flex items-baseline gap-2">
+            <span class="text-eyebrow font-mono uppercase text-[color:var(--color-warn,#a85432)]">
+              This isn't an outbound proposal
+            </span>
+            <span class="text-[10.5px] font-mono text-[color:var(--color-muted-2)]">
+              detected: {p.docKind().replace(/_/g, ' ')}
+            </span>
+          </div>
+          <p class="mt-2 text-[14px] font-serif text-[color:var(--color-ink)] leading-snug">
+            {(() => {
+              switch (p.docKind()) {
+                case 'architectural_plan':
+                  return 'Architectural plan — drawings + dimensions, not a quote. Plans are inputs you quote against.';
+                case 'elevation_drawing':
+                  return 'Elevation drawing — façade with material callouts. Brief reads it for scoping, but the drawing itself isn\'t a quote.';
+                case 'engineer_sealed':
+                  return 'Sealed engineering drawing — mostly dimensions, sparse scope text.';
+                case 'spec_template':
+                  return 'Builder spec template with $-placeholder allowances. A build standard, not a custom proposal.';
+                case 'selections_list':
+                  return 'Homeowner selections list (tile / paint / flooring by room). Reference data, not a quote.';
+                case 'email_thread':
+                  return 'Email scoping thread between you and a designer / GC. Brief reads what was discussed; you draft the quote from there.';
+                case 'vendor_invoice':
+                  return 'Vendor invoice — addressed to you, showing what you paid. Cost data, not a quote.';
+                case 'takeoff':
+                  return 'Takeoff (quantity survey). Brief will use the rows as line items, but confirm units + descriptions before sending.';
+                default:
+                  return p.direction() === 'operator_own'
+                    ? 'One of your own records, not an outbound proposal.'
+                    : 'Document sent to you, not authored by you for a client.';
+              }
+            })()}
+          </p>
+          <p class="mt-2 text-[12.5px] text-[color:var(--color-muted)] leading-relaxed">
+            The Project file (Phase 2) is where these belong — it'll group plans, specs,
+            selections, invoices, and threads under one job, with the quote derived from
+            the inputs. Until then, you can continue through the quote editor (some
+            features won't apply) or go back.
+          </p>
+          <div class="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={p.onContinue}
+              class="font-mono text-[11.5px] uppercase tracking-wide border border-[color:var(--color-ink)] bg-[color:var(--color-ink)] text-[color:var(--color-surface)] px-3 py-1.5 rounded-sm"
+            >
+              Continue as quote anyway
+            </button>
+            <button
+              type="button"
+              onClick={p.onBack}
+              class="font-mono text-[11.5px] uppercase tracking-wide border border-[color:var(--color-line)] bg-white px-3 py-1.5 rounded-sm"
+            >
+              ← Back
+            </button>
+          </div>
         </div>
       </Show>
 
