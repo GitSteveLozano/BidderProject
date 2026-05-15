@@ -1,0 +1,189 @@
+---
+import Brief from '@/layouts/Brief.astro';
+import { client as supabaseService } from '@/lib/supabase';
+import { getProject } from '@/lib/projects';
+
+export const prerender = false;
+Astro.response.headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0');
+
+const env = Astro.locals.runtime?.env;
+const user = Astro.locals.user;
+const membership = Astro.locals.membership;
+if (!user || !membership || !env) {
+  return Astro.redirect('/auth/signin?next=' + encodeURIComponent(Astro.url.pathname));
+}
+
+const id = Astro.params.id;
+if (!id) return Astro.redirect('/projects');
+
+const svc = supabaseService(env, 'service');
+const project = await getProject(svc, membership.shop_id, id);
+if (!project) return Astro.redirect('/projects?error=not-found');
+
+const { data: documents } = await svc
+  .from('intake_documents')
+  .select('id, classification, direction, classification_confidence, source_filename, source_kind, extracted, created_at')
+  .eq('project_id', project.id)
+  .eq('shop_id', membership.shop_id)
+  .order('created_at', { ascending: false });
+
+const { data: quotes } = await svc
+  .from('quotes')
+  .select('id, ref, state, total, sent_at, created_at')
+  .eq('project_id', project.id)
+  .eq('shop_id', membership.shop_id)
+  .order('created_at', { ascending: false });
+
+const { data: shop } = await svc
+  .from('shops')
+  .select('legal_name, trade_name, owner_name, data_state')
+  .eq('id', membership.shop_id)
+  .maybeSingle();
+const shopLabel = shop?.trade_name || shop?.legal_name || 'My shop';
+const ownerFirst = (shop?.owner_name ?? user.name ?? user.email ?? '').split(' ')[0];
+
+const docs = documents ?? [];
+const q = quotes ?? [];
+
+const DIRECTION_PILL: Record<string, string> = {
+  outbound: 'Outbound',
+  inbound: 'Inbound',
+  operator_own: 'Your record',
+};
+const DOC_KIND_LABEL: Record<string, string> = {
+  project_quote: 'Project quote',
+  partnership: 'Partnership pitch',
+  consulting: 'Consulting proposal',
+  rfi_received: 'RFI received',
+  change_request: 'Change request',
+  architectural_plan: 'Architectural plan',
+  elevation_drawing: 'Elevation drawing',
+  engineer_sealed: 'Sealed drawing',
+  spec_template: 'Spec template',
+  takeoff: 'Takeoff',
+  selections_list: 'Selections list',
+  email_thread: 'Email thread',
+  vendor_invoice: 'Vendor invoice',
+  unknown: 'Unknown',
+};
+const STATUS_LABEL: Record<string, string> = {
+  intake: 'Intake',
+  scoped: 'Scoped',
+  quoted: 'Quoted',
+  won: 'Won',
+  lost: 'Lost',
+  in_progress: 'In progress',
+  done: 'Done',
+};
+---
+
+<Brief
+  title={project.name}
+  active="projects"
+  shopLabel={shopLabel}
+  shopInitial={shopLabel.charAt(0).toUpperCase()}
+  ownerFirst={ownerFirst}
+  ownerRole={(membership.role.charAt(0).toUpperCase() + membership.role.slice(1)) as 'Owner' | 'Admin' | 'Member'}
+  dataState={shop?.data_state ?? 'cold-start'}
+>
+  <a href="/projects" class="text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-ink)] inline-flex items-center gap-1">
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 2.5L3.5 6l4 3.5" /></svg>
+    Back to <span class="font-medium ml-0.5">projects</span>
+  </a>
+
+  <div class="mt-4">
+    <div class="flex items-baseline justify-between gap-4">
+      <div>
+        <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted-2)]">Project</div>
+        <h1 class="mt-1 font-serif text-[32px] font-medium leading-tight">{project.name}</h1>
+        {project.address && (
+          <div class="text-[13px] font-mono text-[color:var(--color-muted)] mt-1">{project.address}</div>
+        )}
+      </div>
+      <span class="text-[10.5px] font-mono uppercase tracking-wide text-[color:var(--color-accent)] bg-[color:var(--color-accent-tint,#fbe9d4)] px-2 py-0.5 rounded-sm shrink-0">
+        {STATUS_LABEL[project.status] ?? project.status}
+      </span>
+    </div>
+
+    {project.description && (
+      <p class="mt-3 text-[14px] font-serif text-[color:var(--color-ink-2)] leading-relaxed max-w-[60ch]">
+        {project.description}
+      </p>
+    )}
+  </div>
+
+  <div class="mt-8 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+    <!-- Attached documents -->
+    <section class="space-y-3">
+      <h2 class="font-serif text-[18px] font-medium">Attached documents
+        {docs.length > 0 && <span class="text-[13px] font-mono text-[color:var(--color-muted-2)] ml-2">{docs.length}</span>}
+      </h2>
+      {docs.length === 0 ? (
+        <div class="rounded-xl border border-dashed border-[color:var(--color-line-2)] bg-[color:var(--color-surface-2)] px-5 py-8 text-center">
+          <p class="font-serif italic text-[color:var(--color-muted)]">
+            No documents yet. Drop files on the <a href="/projects" class="underline">projects page</a> to attach.
+          </p>
+        </div>
+      ) : (
+        <ul class="space-y-2">
+          {docs.map((d: any) => (
+            <li class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] px-4 py-3">
+              <div class="flex items-baseline justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="font-medium text-[14px] truncate">
+                    {d.source_filename ?? d.extracted?.scope_summary?.slice(0, 60) ?? 'Untitled'}
+                  </div>
+                  {d.extracted?.scope_summary && (
+                    <div class="text-[12.5px] text-[color:var(--color-muted)] mt-0.5 font-serif italic line-clamp-2">
+                      {d.extracted.scope_summary}
+                    </div>
+                  )}
+                </div>
+                <div class="text-right shrink-0">
+                  <span class="text-[10px] font-mono uppercase tracking-wide text-[color:var(--color-muted-2)]">
+                    {DIRECTION_PILL[d.direction] ?? d.direction}
+                  </span>
+                  <div class="text-[11px] font-mono text-[color:var(--color-ink-2)] mt-0.5">
+                    {DOC_KIND_LABEL[d.classification] ?? d.classification}
+                  </div>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+
+    <!-- Right rail: quotes + actions -->
+    <aside class="space-y-4">
+      <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+        <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-3">Quotes</div>
+        {q.length === 0 ? (
+          <p class="text-[13px] font-serif italic text-[color:var(--color-muted)]">
+            No quotes yet for this project. Phase 4 wires the "Build a quote from this project" button.
+          </p>
+        ) : (
+          <ul class="space-y-2">
+            {q.map((row: any) => (
+              <li>
+                <a
+                  href={`/quotes/${row.id}`}
+                  class="block rounded-md bg-[color:var(--color-surface-2)] px-3 py-2 text-[13px] hover:bg-[color:var(--color-line-2)]"
+                >
+                  <div class="font-mono text-[11.5px]">{row.ref}</div>
+                  <div class="text-[12px] text-[color:var(--color-muted)] mt-0.5">
+                    {row.state} · ${Number(row.total).toLocaleString()}
+                  </div>
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div class="rounded-xl bg-[color:var(--color-surface-2)] px-4 py-3 text-[12px] text-[color:var(--color-muted)] font-serif leading-relaxed italic">
+        Created {new Date(project.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+      </div>
+    </aside>
+  </div>
+</Brief>
