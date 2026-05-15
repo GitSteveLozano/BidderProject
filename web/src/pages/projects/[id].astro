@@ -1,5 +1,6 @@
 ---
 import Brief from '@/layouts/Brief.astro';
+import { projectCostSummary } from '@/lib/cost-records';
 import { client as supabaseService } from '@/lib/supabase';
 import { getProject } from '@/lib/projects';
 
@@ -33,6 +34,26 @@ const { data: quotes } = await svc
   .eq('project_id', project.id)
   .eq('shop_id', membership.shop_id)
   .order('created_at', { ascending: false });
+
+const costSummary = await projectCostSummary(svc, project.id);
+const costTotal = costSummary.reduce((sum: number, row: any) => sum + Number(row.subtotal ?? 0), 0);
+
+const CATEGORY_LABEL: Record<string, string> = {
+  drywall: 'Drywall',
+  paint: 'Paint',
+  tile: 'Tile',
+  lumber: 'Lumber',
+  hardware: 'Hardware',
+  roofing: 'Roofing',
+  plumbing: 'Plumbing',
+  electrical: 'Electrical',
+  flooring: 'Flooring',
+  fixtures: 'Fixtures',
+  labor: 'Labor',
+  rental: 'Rental',
+  other: 'Other',
+  uncategorized: 'Uncategorized',
+};
 
 const { data: shop } = await svc
   .from('shops')
@@ -154,8 +175,38 @@ const STATUS_LABEL: Record<string, string> = {
       )}
     </section>
 
-    <!-- Right rail: quotes + actions -->
+    <!-- Right rail: cost basis + quotes + actions -->
     <aside class="space-y-4">
+      <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
+        <div class="flex items-baseline justify-between mb-3">
+          <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)]">Cost basis</div>
+          {costTotal > 0 && (
+            <div class="font-mono text-[12px] text-[color:var(--color-ink)]">
+              ${costTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+            </div>
+          )}
+        </div>
+        {costSummary.length === 0 ? (
+          <p class="text-[13px] font-serif italic text-[color:var(--color-muted)]">
+            No vendor invoices yet. Drop invoices on the projects page and Brief tallies them by category.
+          </p>
+        ) : (
+          <ul class="space-y-1.5">
+            {costSummary.map((row: any) => (
+              <li class="flex items-baseline justify-between gap-3 text-[12.5px]">
+                <span class="font-mono text-[color:var(--color-ink-2)]">
+                  {CATEGORY_LABEL[row.category] ?? row.category}
+                  <span class="text-[color:var(--color-muted-2)] ml-1">({row.line_count})</span>
+                </span>
+                <span class="font-mono text-[color:var(--color-ink)]">
+                  ${Number(row.subtotal).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
         <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-3">Quotes</div>
         {q.length === 0 ? (

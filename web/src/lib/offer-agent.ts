@@ -27,6 +27,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { generateText, extractJson } from './ai';
 import { retrieve } from './context';
+import { searchSimilarCosts } from './cost-records';
 import type { CloudflareEnv } from './supabase';
 
 export interface LookupSpec {
@@ -39,7 +40,7 @@ export interface LookupSpec {
 }
 
 export interface OfferCitation {
-  source: 'context' | 'quotes' | 'jobs' | 'shop_defaults';
+  source: 'context' | 'quotes' | 'jobs' | 'shop_defaults' | 'cost_records';
   ref: string;
   contribution: string;
   amount?: number;
@@ -335,16 +336,38 @@ export async function recommendOffer(
 
   let materialTotal = 0;
   for (const m of spec.material_lookups ?? []) {
+    const qty = Number(m.quantity) || 0;
     const rate = materialRates[m.item];
-    if (!rate) continue;
-    const amt = rate.unit_cost * (Number(m.quantity) || 0);
-    materialTotal += amt;
-    citations.push({
-      source: 'shop_defaults',
-      ref: `material_rate/${m.item}`,
-      contribution: `${m.quantity} ${m.unit} × $${rate.unit_cost.toFixed(2)} = $${amt.toFixed(2)}`,
-      amount: amt,
+    if (rate) {
+      const amt = rate.unit_cost * qty;
+      materialTotal += amt;
+      citations.push({
+        source: 'shop_defaults',
+        ref: `material_rate/${m.item}`,
+        contribution: `${m.quantity} ${m.unit} × $${rate.unit_cost.toFixed(2)} = $${amt.toFixed(2)}`,
+        amount: amt,
+      });
+      continue;
+    }
+    // No default rate — fall back to historical cost records. Uses
+    // the closest semantic match by description. Same shop only.
+    const similar = await searchSimilarCosts(env, svc, {
+      shop_id: shopId,
+      query_text: m.item,
+      limit: 1,
     });
+    const hit = similar[0];
+    if (hit && hit.unit_cost != null && Number(hit.distance) < 0.35) {
+      const unitCost = Number(hit.unit_cost);
+      const amt = unitCost * qty;
+      materialTotal += amt;
+      citations.push({
+        source: 'cost_records',
+        ref: `cost_record/${hit.id}`,
+        contribution: `${m.quantity} ${m.unit} × $${unitCost.toFixed(2)} (${hit.vendor_name ?? 'past invoice'}, ${hit.invoice_date ?? 'no date'}) = $${amt.toFixed(2)}`,
+        amount: amt,
+      });
+    }
   }
 
   // Pick first margin/capacity/win_rate lookup as the headline.

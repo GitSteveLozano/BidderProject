@@ -45,6 +45,15 @@ export const POST: APIRoute = async ({ params, request, locals }) => {
     await attachDocumentToProject(svc, shopId, docId, project.id);
   }
 
+  // Backfill project_id on cost_records that came from these docs.
+  // Cost records are minted with project_id=null during intake; the
+  // operator confirming the grouping is what binds them to a project.
+  await svc
+    .from('cost_records')
+    .update({ project_id: project.id })
+    .eq('shop_id', shopId)
+    .in('source_document_id', body.document_ids);
+
   const status = await recomputeProjectStatus(svc, project.id);
   return json({ attached: body.document_ids.length, status }, 200);
 };

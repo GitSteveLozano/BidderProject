@@ -21,6 +21,7 @@
 import type { APIRoute } from 'astro';
 import { extractText, getDocumentProxy } from 'unpdf';
 
+import { lineItemsToCostCandidates, persistCostRecords } from '@/lib/cost-records';
 import { classifyAndExtract } from '@/lib/intake-agent';
 import { findMatchingProjects, projectSignalText } from '@/lib/projects';
 import { client as supabaseService } from '@/lib/supabase';
@@ -120,6 +121,25 @@ export const POST: APIRoute = async ({ request, locals }) => {
     .select('id')
     .single();
 
+  // If this is a vendor invoice, extract cost records from its line
+  // items. Cost records start project-less (project_id null); the
+  // /api/project/[id]/attach endpoint backfills project_id when the
+  // operator confirms the grouping.
+  let costRecordsInserted = 0;
+  if (
+    extract.classification === 'vendor_invoice' &&
+    stored?.id &&
+    extract.line_items.length > 0
+  ) {
+    const result = await persistCostRecords(env, svc, {
+      shop_id: shopId,
+      source_document_id: stored.id,
+      vendor_name: extract.client_hints.client_name,
+      items: lineItemsToCostCandidates(extract.line_items),
+    });
+    costRecordsInserted = result.inserted;
+  }
+
   // Auto-match against existing projects.
   const signal = projectSignalText({
     name: extract.client_hints.client_name ?? extract.client_hints.project_title,
@@ -159,6 +179,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
       },
       matches,
       suggested_project: suggestedProject,
+      cost_records_inserted: costRecordsInserted,
       persist_error: insertErr?.message ?? null,
     },
     200,
