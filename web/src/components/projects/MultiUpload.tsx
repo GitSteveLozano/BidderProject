@@ -77,10 +77,10 @@ export default function MultiUpload(props: { onComplete?: () => void }) {
   const onPick = (list: FileList | null) => {
     if (!list || list.length === 0) return;
     const next: FileEntry[] = Array.from(list)
-      .filter((f) => /\.pdf$/i.test(f.name))
+      .filter((f) => /\.(pdf|png|jpe?g|webp)$/i.test(f.name))
       .map((f) => ({ file: f, status: 'queued' as const }));
     if (next.length === 0) {
-      setFiles([{ file: list[0], status: 'error', error: 'No PDFs selected' }]);
+      setFiles([{ file: list[0], status: 'error', error: 'No PDFs or images selected' }]);
       return;
     }
     setFiles(next);
@@ -174,7 +174,7 @@ export default function MultiUpload(props: { onComplete?: () => void }) {
             ref={inputRef}
             type="file"
             multiple
-            accept="application/pdf,.pdf"
+            accept="application/pdf,.pdf,image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
             class="sr-only"
             onChange={(e) => onPick(e.currentTarget.files)}
           />
@@ -182,9 +182,9 @@ export default function MultiUpload(props: { onComplete?: () => void }) {
             <path d="M11 16V6M6 11l5-5 5 5" />
             <path d="M3 18h16" />
           </svg>
-          <div class="mt-3 text-[15px] font-medium">Drop a folder or pick multiple PDFs</div>
+          <div class="mt-3 text-[15px] font-medium">Drop a folder or pick PDFs and images</div>
           <div class="mt-1 text-[12.5px] text-[color:var(--color-muted)]">
-            Brief reads each one, classifies it, and groups related files into projects.
+            Brief reads each one — PDFs through the text classifier, images through vision — and groups related files into projects.
           </div>
         </label>
       </Show>
