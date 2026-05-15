@@ -14,7 +14,7 @@ interface Props {
   title?: string;
   description?: string;
   /** Active nav item — drives the sidebar highlight + topbar crumb. */
-  active?: 'dashboard' | 'quotes' | 'jobs' | 'clients' | 'settings' | 'newquote' | 'quotedetail';
+  active?: 'dashboard' | 'projects' | 'quotes' | 'jobs' | 'clients' | 'settings' | 'newquote' | 'quotedetail';
   /** Shop label rendered in the topbar crumb. */
   shopLabel?: string;
   /** Shop avatar initial + owner role for the sidebar shop chip. */
@@ -45,6 +45,7 @@ const {
 
 const CRUMB: Record<NonNullable<Props['active']>, string> = {
   dashboard: 'Dashboard',
+  projects: 'Projects',
   quotes: 'Quotes',
   jobs: 'Jobs',
   clients: 'Clients',
@@ -145,6 +146,12 @@ const navClass = (key: Props['active']) =>
               <rect x="8" y="8" width="4" height="4" rx="0.6" />
             </svg>
             <span>Dashboard</span>
+          </a>
+          <a href="/projects" class={navClass('projects')}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+              <path d="M1.5 4a0.5 0.5 0 0 1 0.5 -0.5h3.2l1.3 1.3h6a0.5 0.5 0 0 1 0.5 0.5v6.2a0.5 0.5 0 0 1 -0.5 0.5h-10.5a0.5 0.5 0 0 1 -0.5 -0.5z" />
+            </svg>
+            <span>Projects</span>
           </a>
           <a href="/quotes" class={navClass('quotes')}>
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">

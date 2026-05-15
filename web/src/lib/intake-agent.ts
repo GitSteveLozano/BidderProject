@@ -322,7 +322,7 @@ export async function classifyAndExtract(
     });
   } catch (e) {
     console.warn('[intake] generation failed', e);
-    return { classification: 'unknown', confidence: 0, ...EMPTY_EXTRACT };
+    return { classification: 'unknown', confidence: 0, direction: 'outbound', ...EMPTY_EXTRACT };
   }
 
   const parsed = extractJson<Partial<IntakeExtract>>(raw);
@@ -330,6 +330,7 @@ export async function classifyAndExtract(
     return {
       classification: 'unknown',
       confidence: 0,
+      direction: 'outbound',
       ...EMPTY_EXTRACT,
       flags: [
         {
