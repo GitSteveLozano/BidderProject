@@ -1,5 +1,6 @@
 ---
 import Brief from '@/layouts/Brief.astro';
+import BuildQuoteButton from '@/components/projects/BuildQuoteButton';
 import { projectCostSummary } from '@/lib/cost-records';
 import { client as supabaseService } from '@/lib/supabase';
 import { getProject } from '@/lib/projects';
@@ -209,9 +210,17 @@ const STATUS_LABEL: Record<string, string> = {
 
       <div class="rounded-xl border border-[color:var(--color-line)] bg-[color:var(--color-surface)] p-5">
         <div class="text-eyebrow font-mono uppercase text-[color:var(--color-muted)] mb-3">Quotes</div>
+        <div class="mb-4">
+          <BuildQuoteButton
+            client:load
+            projectId={project.id}
+            disabled={docs.length === 0}
+            disabledReason="Attach at least one document first"
+          />
+        </div>
         {q.length === 0 ? (
           <p class="text-[13px] font-serif italic text-[color:var(--color-muted)]">
-            No quotes yet for this project. Phase 4 wires the "Build a quote from this project" button.
+            No quotes yet for this project. Build one from the attached docs above.
           </p>
         ) : (
           <ul class="space-y-2">
