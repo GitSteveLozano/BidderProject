@@ -11,6 +11,7 @@
 import type { APIRoute } from 'astro';
 
 import { classifyAndExtract, decideRoute } from '@/lib/intake-agent';
+import { normalizeTakeoffItems } from '@/lib/takeoff-parser';
 import { client as supabaseService } from '@/lib/supabase';
 
 export const prerender = false;
@@ -48,6 +49,9 @@ export const POST: APIRoute = async ({ request, locals }) => {
     client_name: body.client_name,
     project_title: body.project_title,
   });
+  if (extract.classification === 'takeoff' && extract.line_items.length > 0) {
+    extract.line_items = normalizeTakeoffItems(extract.line_items);
+  }
   const route = decideRoute(extract);
 
   const svc = supabaseService(env, 'service');
