@@ -28,13 +28,57 @@
 import { generateText, extractJson } from './ai';
 import type { CloudflareEnv } from './supabase';
 
+/** Direction of the document relative to the operator.
+ *
+ * outbound      — operator → client. The five proposal styles fall
+ *                 under this (project_quote, partnership, etc.) and
+ *                 these are the docs the quote wizard handles.
+ * inbound       — client / GC / designer → operator. Plans,
+ *                 selections, RFI received, scoping emails. These
+ *                 route to a project file, not the quote editor.
+ * operator_own  — operator's own records (vendor invoices, spec
+ *                 templates they re-use). Feed cost basis + the
+ *                 shape library; never get sent.
+ */
+export type Direction = 'outbound' | 'inbound' | 'operator_own';
+
 export type Classification =
+  // outbound proposals (operator-authored)
   | 'project_quote'
   | 'partnership'
   | 'consulting'
-  | 'rfi_received'
+  | 'rfi_received'           // a buyer's RFI sitting in front of an operator
   | 'change_request'
+  // inbound (sent to the operator — inputs for producing a quote)
+  | 'architectural_plan'
+  | 'elevation_drawing'
+  | 'engineer_sealed'
+  | 'spec_template'
+  | 'takeoff'
+  | 'selections_list'
+  | 'email_thread'
+  // operator-own
+  | 'vendor_invoice'
+  // catch-all
   | 'unknown';
+
+/** Direction implied by each classification when the model omits it. */
+const CLASSIFICATION_DIRECTION: Record<Classification, Direction> = {
+  project_quote: 'outbound',
+  partnership: 'outbound',
+  consulting: 'outbound',
+  rfi_received: 'inbound',
+  change_request: 'outbound',
+  architectural_plan: 'inbound',
+  elevation_drawing: 'inbound',
+  engineer_sealed: 'inbound',
+  spec_template: 'inbound',
+  takeoff: 'inbound',
+  selections_list: 'inbound',
+  email_thread: 'inbound',
+  vendor_invoice: 'operator_own',
+  unknown: 'outbound',
+};
 
 export const ROUTING_CONFIDENCE_THRESHOLD = 0.9;
 
@@ -50,6 +94,10 @@ export interface LineItem {
 
 export interface IntakeExtract {
   classification: Classification;
+  /** Direction of the doc — see Direction type. The wizard routes
+   * on this: outbound → quote editor; inbound + operator_own →
+   * project file. */
+  direction: Direction;
   confidence: number;
   scope_summary: string;
   client_hints: {
@@ -73,7 +121,7 @@ export interface IntakeExtract {
   flags: Array<{ kind: 'warn' | 'info'; text: string }>;
 }
 
-const EMPTY_EXTRACT: Omit<IntakeExtract, 'classification' | 'confidence'> = {
+const EMPTY_EXTRACT: Omit<IntakeExtract, 'classification' | 'confidence' | 'direction'> = {
   scope_summary: '',
   client_hints: {
     client_name: null,
@@ -94,31 +142,76 @@ const EMPTY_EXTRACT: Omit<IntakeExtract, 'classification' | 'confidence'> = {
 };
 
 const SYSTEM_PROMPT = `You are Brief's Intake agent. You read one document
-(a proposal, RFP, scope, email, or transcript) and produce a SINGLE JSON
-object describing what it is and what it contains.
+that arrived in a contractor's / agency's / homebuilder's inbox and
+produce a SINGLE JSON object describing what it is.
 
 Return ONLY the JSON object — no fences, no preamble, no closing.
 
-Classification taxonomy (pick exactly one):
-- "itemized_project_quote": Vendor-authored bid with line items
-  (descriptions, quantities, units, prices). Contractor-style.
-- "templated_partnership_pitch": Vendor-authored partnership/supply
-  proposal. Need/Solution structure, rebates, training, transition
-  plan. No per-project line items.
-- "narrative_consulting_proposal": Agency/consulting proposal. Phases,
-  deliverables, narrative. Typically no per-unit pricing.
-- "inbound_rfi": A buyer asking vendors to respond. Lists requirements,
-  asks questions, has submission instructions. Document is INCOMING.
+Direction (pick exactly one). Tells the app whether this is something
+the operator is producing vs. consuming:
+- "outbound"     — Operator-authored. Goes to a client. The five
+                   proposal styles below are all outbound.
+- "inbound"      — Sent TO the operator. Plans, selections, RFI,
+                   designer email. Inputs to producing a quote, not
+                   the quote itself.
+- "operator_own" — Operator's internal records. Vendor invoices,
+                   spec templates they reuse. Cost data + reference.
+
+Classification (pick exactly one). Determines the editor + shape the
+app uses downstream:
+
+OUTBOUND classes:
+- "project_quote": Operator's bid with line items (qty/unit/price).
+  Contractor or vendor style.
+- "partnership": Supplier-to-customer partnership pitch. Need/solution,
+  rebates, training, transition plan, multi-year term. No per-project
+  line items.
+- "consulting": Agency / studio / consulting proposal. Phases +
+  deliverables. Often no per-unit pricing.
+- "rfi_received": A buyer's RFI sitting in front of the operator —
+  the operator needs to RESPOND. Lists requirements + vendor
+  questions + submission instructions. (Direction is 'inbound' even
+  though the operator will write an outbound response.)
 - "change_request": Mid-job scope change (add a wall, switch finish).
+
+INBOUND classes (sent TO the operator):
+- "architectural_plan": Floor plans / structural drawings / full
+  building set. Typically 8+ pages, lots of dimension labels, sheet
+  index (A-1 site, A-2 elevations, S-1 foundation, etc.).
+- "elevation_drawing": Façade drawing with material callouts
+  ("Acrylic Stucco - Kendall Charcoal", "Board and batten Hardie",
+  shingle colors). Single or few pages.
+- "engineer_sealed": Stamped engineering doc, mostly dimensions, may
+  have a P.Eng seal/stamp. Sparse text.
+- "spec_template": Builder spec sheet with $ allowances by category
+  (Foundation / Walls / Roof / Electrical / etc.) — a build standard,
+  not a custom proposal. Often has "$ + GST" placeholder dollar
+  amounts.
+- "takeoff": Quantity survey. Tables of items + counts + dimensions
+  derived from plans. Used to feed a quote.
+- "selections_list": Homeowner's chosen finishes by room (tile, paint,
+  flooring, hardware). Usually a Word doc or simple list.
+- "email_thread": Multi-message scoping conversation between the
+  operator, a designer, and/or a GC. Reply-quoted chains, multiple
+  authors.
+
+OPERATOR-OWN classes:
+- "vendor_invoice": A supplier's invoice / sales order to the
+  operator. Has BILL TO / SHIP TO addressed to the operator, an
+  invoice/order number, line items with prices the operator PAID. This
+  is cost data, not what they will quote.
+
+CATCH-ALL:
 - "unknown": Confidence too low to commit.
 
-confidence: float 0-1, your honest read.
+confidence: float 0-1.
 
-Then populate the shape below. Use the fields appropriate to the
+Then populate the shape below. Use fields appropriate to the
 classification. Unused fields stay as empty arrays / null.
 
 {
   "classification": one of the values above,
+  "direction": "outbound" | "inbound" | "operator_own",
   "confidence": 0-1,
   "scope_summary": "1-2 sentence plain-English summary",
   "client_hints": {
@@ -160,14 +253,43 @@ production | rebate | marketing_support | training | other
 
 Rules:
 - Do not invent. If the source doesn't say something, return null/[].
-- For inbound_rfi: line_items + rebate_terms + phases stay empty.
-  Populate requirements, questions, deadline, and flag the doc as RFI.
-- For narrative_consulting_proposal: phases is the primary output.
-  line_items only populated if the doc actually has prices.
-- For templated_partnership_pitch: rebate_terms + term_months are the
-  primary output. line_items empty.
-- For change_request: line_items only (the adds/deletes), flagged as
-  change-order content.`;
+- For rfi_received: line_items + rebate_terms + phases stay empty.
+  Populate requirements, questions, deadline. Direction is 'inbound'.
+- For consulting: phases is the primary output. line_items only
+  populated if the doc actually has prices.
+- For partnership: rebate_terms + term_months are the primary output.
+  line_items empty.
+- For change_request: line_items only (the adds/deletes).
+
+Inbound + operator-own routing (Phase 1 — these route to a project
+file, not the quote editor):
+- For architectural_plan / elevation_drawing / engineer_sealed:
+  DO NOT extract line_items. Drawings aren't proposals. Populate
+  scope_summary with what the doc describes (e.g. "2-story addition
+  plans, 2200 sqft, Manitoba code") and client_hints from any
+  legible client/project labels. Direction is 'inbound'.
+- For spec_template: don't extract dollar amounts ($-placeholders are
+  templates). Populate scope_summary describing the spec scope.
+  Direction is 'inbound' (sent by a builder to be used).
+- For takeoff: line_items CAN be extracted — they're the takeoff
+  rows themselves. Mark category appropriately. Direction is 'inbound'.
+- For selections_list: don't extract line_items. Note categories
+  (flooring, tile, paint) in scope_summary. Direction is 'inbound'.
+- For email_thread: don't extract line_items. scope_summary should
+  describe what's being discussed. Pull client_hints from the email
+  thread participants. Direction is 'inbound'.
+- For vendor_invoice: extract line_items (the operator's costs —
+  used downstream as cost basis). category='materials' usually.
+  Direction is 'operator_own'.
+
+Strong signals for direction detection:
+- SHIP TO / BILL TO / INVOICE NO / SALES ORDER NO → vendor_invoice,
+  operator_own. The addressee is the operator.
+- "Proposal to: [Person]" header, signature line at end → outbound.
+- DRAWING NO / SHEET INDEX / dimension labels everywhere → plan.
+- "Selections" / "Material Selection" / room-by-room finish list →
+  selections_list.
+- Reply-quoted "On [date] [name] wrote:" → email_thread.`;
 
 export interface ClassifyOpts {
   /** Max chars of input text the model sees. Default 16k. */
@@ -224,9 +346,18 @@ export async function classifyAndExtract(
     ? parsed.classification
     : 'unknown';
   const confidence = clamp01(Number(parsed.confidence ?? 0));
+  // Direction: trust the model's explicit value, fall back to the
+  // classification's implied direction.
+  const direction: Direction =
+    parsed.direction === 'outbound' ||
+    parsed.direction === 'inbound' ||
+    parsed.direction === 'operator_own'
+      ? parsed.direction
+      : CLASSIFICATION_DIRECTION[classification];
 
   return {
     classification,
+    direction,
     confidence,
     scope_summary: typeof parsed.scope_summary === 'string' ? parsed.scope_summary : '',
     client_hints: {
@@ -297,13 +428,14 @@ export interface RouteDecision {
     | 'consulting_editor'
     | 'rfi_response_helper'
     | 'change_order_editor'
+    | 'project_file'      // inbound + operator_own land here (Phase 2 wires it up)
     | 'unknown';
 }
 
 /** Deterministic routing from an extract. App code calls this; the
  * LLM never decides routing. */
 export function decideRoute(extract: IntakeExtract): RouteDecision {
-  const flow = flowFor(extract.classification);
+  const flow = flowFor(extract.classification, extract.direction);
   return {
     route: extract.confidence >= ROUTING_CONFIDENCE_THRESHOLD ? 'auto' : 'confirm',
     classification: extract.classification,
@@ -312,7 +444,15 @@ export function decideRoute(extract: IntakeExtract): RouteDecision {
   };
 }
 
-function flowFor(c: Classification): RouteDecision['recommended_flow'] {
+function flowFor(c: Classification, direction: Direction): RouteDecision['recommended_flow'] {
+  // Inbound + operator-own docs route to the project file in Phase 2.
+  // Until then, the wizard catches the signal and shows a warning
+  // banner; the operator can still proceed through the quote editor
+  // if they really want to.
+  if (direction === 'inbound' || direction === 'operator_own') {
+    if (c === 'rfi_received') return 'rfi_response_helper';
+    return 'project_file';
+  }
   switch (c) {
     case 'project_quote':
       return 'quote_production';
@@ -329,15 +469,24 @@ function flowFor(c: Classification): RouteDecision['recommended_flow'] {
   }
 }
 
+const ALL_CLASSIFICATIONS: ReadonlyArray<Classification> = [
+  'project_quote',
+  'partnership',
+  'consulting',
+  'rfi_received',
+  'change_request',
+  'architectural_plan',
+  'elevation_drawing',
+  'engineer_sealed',
+  'spec_template',
+  'takeoff',
+  'selections_list',
+  'email_thread',
+  'vendor_invoice',
+  'unknown',
+];
 function isClassification(v: unknown): v is Classification {
-  return (
-    v === 'project_quote' ||
-    v === 'partnership' ||
-    v === 'consulting' ||
-    v === 'rfi_received' ||
-    v === 'change_request' ||
-    v === 'unknown'
-  );
+  return typeof v === 'string' && (ALL_CLASSIFICATIONS as readonly string[]).includes(v);
 }
 
 function clamp01(n: number): number {

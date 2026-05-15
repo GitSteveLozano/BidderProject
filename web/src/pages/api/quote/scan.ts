@@ -42,6 +42,11 @@ preamble, no closing.
 
 {
   "proposal_style": "project_quote" | "partnership" | "consulting" | "rfi_received" | "unknown",
+  "direction": "outbound" | "inbound" | "operator_own",
+  "doc_kind": "project_quote" | "partnership" | "consulting" | "rfi_received" |
+              "change_request" | "architectural_plan" | "elevation_drawing" |
+              "engineer_sealed" | "spec_template" | "takeoff" | "selections_list" |
+              "email_thread" | "vendor_invoice" | "unknown",
   "confidence": 0-1 (your honest read),
   "offer_kind": "quote" | "bid" | "proposal" | "contract",
   "pricing_structure": "fixed_price" | "itemized" | "phase_priced" | "time_and_materials" | "rebate_program",
@@ -135,7 +140,33 @@ Rules:
   info for context that affects pricing or interpretation.
 - For rfi_received, ALWAYS include a warn flag: "This looks like an
   inbound RFI — Brief assumes you're authoring an outbound bid. Want
-  to draft just the narrative response sections?"`;
+  to draft just the narrative response sections?"
+
+Direction + doc_kind: the wizard routes on these. Even when
+proposal_style is unknown, set doc_kind to the most specific class
+that matches the source. Examples:
+- ship-to/bill-to addressed TO the operator, line items priced by
+  vendor → doc_kind="vendor_invoice", direction="operator_own"
+- sheet index (A-1 site, A-2 elev, S-1 found), dimension labels →
+  doc_kind="architectural_plan", direction="inbound"
+- façade with material callouts (Hardie, stucco, shingle colors) →
+  doc_kind="elevation_drawing", direction="inbound"
+- "Material Selection and Specification" + room-by-room finishes →
+  doc_kind="selections_list", direction="inbound"
+- Reply-quoted email thread between operator + designer/GC →
+  doc_kind="email_thread", direction="inbound"
+- Builder spec template with "$ + GST" placeholder dollar values →
+  doc_kind="spec_template", direction="inbound"
+- Stamped engineering drawing with P.Eng seal, mostly dimensions →
+  doc_kind="engineer_sealed", direction="inbound"
+- Takeoff table (item / qty / unit) for a build →
+  doc_kind="takeoff", direction="inbound"
+
+If direction is "inbound" or "operator_own", DO NOT fabricate
+line_items unless doc_kind="takeoff" or "vendor_invoice" (those
+legitimately have item rows). For plans / elevations / sealed
+drawings / selections / threads / spec_templates: leave line_items
+empty; scope_summary describes what the doc is.`;
 
 export const POST: APIRoute = async ({ request, locals }) => {
   const env = locals.runtime?.env;
@@ -191,6 +222,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
 
         const parsed = extractJson<{
           proposal_style?: string;
+          direction?: string;
+          doc_kind?: string;
           confidence?: number;
           offer_kind?: string;
           pricing_structure?: string;
@@ -233,6 +266,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
           typeof parsed?.term_months === 'number' ? parsed.term_months : null;
         const scope_summary =
           typeof parsed?.scope_summary === 'string' ? parsed.scope_summary : '';
+        const doc_kind = normalizeDocKind(parsed?.doc_kind, proposal_style);
+        const direction = normalizeDirection(parsed?.direction, doc_kind);
 
         // Emit classification first so the wizard can switch editors
         // before line items / phases start arriving.
@@ -245,8 +280,25 @@ export const POST: APIRoute = async ({ request, locals }) => {
             term_months,
             offer_kind,
             pricing_structure,
+            direction,
+            doc_kind,
           },
         });
+
+        // Inbound or operator-own → the wizard should not treat this
+        // like an outbound quote. Surface a high-visibility flag so
+        // the operator knows. Phase 2 will route these to the project
+        // file directly; for now they get a warning and the option to
+        // continue.
+        if (direction !== 'outbound') {
+          emit({
+            type: 'flag',
+            payload: {
+              kind: 'warn',
+              text: docKindWarningCopy(doc_kind, direction),
+            },
+          });
+        }
 
         const line_items = Array.isArray(parsed?.line_items) ? parsed!.line_items : [];
         const phases = Array.isArray(parsed?.phases) ? parsed!.phases : [];
@@ -331,6 +383,8 @@ export const POST: APIRoute = async ({ request, locals }) => {
             program_type,
             term_months,
             scope_summary,
+            direction,
+            doc_kind,
             line_item_count: line_items.length,
             phase_count: phases.length,
             rebate_term_count: rebate_terms.length,
@@ -428,4 +482,107 @@ function clamp01(n: number): number {
 function round(n: number, decimals: number): number {
   const m = Math.pow(10, decimals);
   return Math.round(n * m) / m;
+}
+
+type DocKind =
+  | 'project_quote'
+  | 'partnership'
+  | 'consulting'
+  | 'rfi_received'
+  | 'change_request'
+  | 'architectural_plan'
+  | 'elevation_drawing'
+  | 'engineer_sealed'
+  | 'spec_template'
+  | 'takeoff'
+  | 'selections_list'
+  | 'email_thread'
+  | 'vendor_invoice'
+  | 'unknown';
+
+const ALL_DOC_KINDS: ReadonlyArray<DocKind> = [
+  'project_quote',
+  'partnership',
+  'consulting',
+  'rfi_received',
+  'change_request',
+  'architectural_plan',
+  'elevation_drawing',
+  'engineer_sealed',
+  'spec_template',
+  'takeoff',
+  'selections_list',
+  'email_thread',
+  'vendor_invoice',
+  'unknown',
+];
+
+function normalizeDocKind(
+  v: unknown,
+  proposalStyle: 'project_quote' | 'partnership' | 'consulting' | 'rfi_received' | 'unknown',
+): DocKind {
+  if (typeof v === 'string' && (ALL_DOC_KINDS as readonly string[]).includes(v)) {
+    return v as DocKind;
+  }
+  // Fall back to proposal_style — the outbound classes line up.
+  return proposalStyle;
+}
+
+type Direction = 'outbound' | 'inbound' | 'operator_own';
+
+const DOC_KIND_DIRECTION: Record<DocKind, Direction> = {
+  project_quote: 'outbound',
+  partnership: 'outbound',
+  consulting: 'outbound',
+  rfi_received: 'inbound',
+  change_request: 'outbound',
+  architectural_plan: 'inbound',
+  elevation_drawing: 'inbound',
+  engineer_sealed: 'inbound',
+  spec_template: 'inbound',
+  takeoff: 'inbound',
+  selections_list: 'inbound',
+  email_thread: 'inbound',
+  vendor_invoice: 'operator_own',
+  unknown: 'outbound',
+};
+
+function normalizeDirection(v: unknown, docKind: DocKind): Direction {
+  if (v === 'outbound' || v === 'inbound' || v === 'operator_own') return v;
+  return DOC_KIND_DIRECTION[docKind];
+}
+
+/** Operator-facing copy explaining why this doc is being treated
+ * differently. Surfaces as a warn flag on the Scope step. Phase 2
+ * will replace this with a redirect to the project file. */
+function docKindWarningCopy(kind: DocKind, direction: Direction): string {
+  const base = (() => {
+    switch (kind) {
+      case 'architectural_plan':
+        return "This looks like an architectural plan — pages of dimensions + sheet index. Plans aren't proposals; you don't quote a plan, you quote against it.";
+      case 'elevation_drawing':
+        return 'This looks like an elevation drawing — façade with material callouts. Brief will use the materials for scoping, but the drawing itself isn\'t a quote.';
+      case 'engineer_sealed':
+        return 'This looks like a sealed engineering drawing — mostly dimensions, no scope text.';
+      case 'spec_template':
+        return 'This looks like a builder spec template with $-placeholder allowances. It\'s a build standard, not a custom proposal.';
+      case 'selections_list':
+        return 'This looks like a homeowner selections list (tile / paint / flooring by room). Brief will use the choices when building line items, but the list itself isn\'t the quote.';
+      case 'email_thread':
+        return 'This looks like an email scoping thread, not a finished proposal. Brief will pull what was discussed; you draft the quote from there.';
+      case 'vendor_invoice':
+        return 'This looks like a vendor invoice — addressed to you, with the price you PAID, not the price you\'ll charge. Brief stores it as cost data, not a quote.';
+      case 'takeoff':
+        return 'This looks like a takeoff (quantity survey). Brief will use the rows as line items, but confirm units + descriptions before sending.';
+      default:
+        if (direction === 'operator_own') {
+          return 'This looks like one of your own records, not an outbound proposal.';
+        }
+        if (direction === 'inbound') {
+          return 'This looks like a document sent to you, not authored by you for a client.';
+        }
+        return 'Brief isn\'t sure what kind of document this is.';
+    }
+  })();
+  return `${base} Until the Project file lands (Phase 2), you can continue through the quote editor or stop here.`;
 }

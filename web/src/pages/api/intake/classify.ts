@@ -60,6 +60,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
       source_filename: body.source_filename ?? null,
       raw_text: body.raw_text.slice(0, 50000),
       classification: extract.classification,
+      direction: extract.direction,
       classification_confidence: extract.confidence,
       extracted: {
         scope_summary: extract.scope_summary,
