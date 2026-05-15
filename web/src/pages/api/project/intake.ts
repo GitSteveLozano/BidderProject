@@ -25,6 +25,7 @@ import type { APIRoute } from 'astro';
 import { extractText, getDocumentProxy } from 'unpdf';
 
 import { lineItemsToCostCandidates, persistCostRecords } from '@/lib/cost-records';
+import { parseEmailThread } from '@/lib/email-thread-parser';
 import { classifyAndExtract } from '@/lib/intake-agent';
 import { findMatchingProjects, projectSignalText } from '@/lib/projects';
 import { client as supabaseService } from '@/lib/supabase';
@@ -190,6 +191,17 @@ export const POST: APIRoute = async ({ request, locals }) => {
       deadline: extract.deadline,
       flags: extract.flags,
     };
+
+    // Email thread structural parse — splits into per-message blocks
+    // so the project surface can show "N messages from M people" and
+    // the Offer agent can read who-said-what. Pure-text regex pass,
+    // no LLM call. Only runs when the LLM classified the doc as a
+    // thread; safe to attach the result even if parse yields zero
+    // messages (degraded copy/paste).
+    if (extract.classification === 'email_thread') {
+      const thread = parseEmailThread(trimmed);
+      extractedPayload.thread = thread;
+    }
   }
 
   // Persist as a free-floating intake_documents row (project_id null).

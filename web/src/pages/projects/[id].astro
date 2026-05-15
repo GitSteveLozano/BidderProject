@@ -174,6 +174,14 @@ const STATUS_LABEL: Record<string, string> = {
                       )}
                     </div>
                   )}
+                  {d.extracted?.thread?.message_count > 0 && (
+                    <div class="mt-1.5 text-[11px] font-mono text-[color:var(--color-muted)]">
+                      {d.extracted.thread.message_count} message{d.extracted.thread.message_count === 1 ? '' : 's'}
+                      {d.extracted.thread.participants?.length > 0 && (
+                        <span> · {d.extracted.thread.participants.map((p: any) => p.name ?? p.email).filter(Boolean).slice(0, 4).join(', ')}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div class="text-right shrink-0">
                   <span class="text-[10px] font-mono uppercase tracking-wide text-[color:var(--color-muted-2)]">
